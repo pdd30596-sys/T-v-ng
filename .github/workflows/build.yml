@@ -26,8 +26,8 @@ jobs:
                   applicationId "vn.tuvung.app"
                   minSdk 26
                   targetSdk 34
-                  versionCode 3
-                  versionName "1.2"
+                  versionCode 4
+                  versionName "1.3"
               }
 
               signingConfigs {
@@ -1179,17 +1179,10 @@ jobs:
                   android:textColor="#86EFAC"
                   android:textSize="12sp" />
 
-              <LinearLayout
+              <TextView
+                  android:id="@+id/tv_word"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
-                  android:layout_weight="1"
-                  android:gravity="center_vertical"
-                  android:orientation="horizontal">
-
-                  <TextView
-                  android:id="@+id/tv_word"
-                  android:layout_width="0dp"
-                  android:layout_height="match_parent"
                   android:layout_weight="1"
                   android:gravity="center"
                   android:text="Từ vựng"
@@ -1197,17 +1190,16 @@ jobs:
                   android:textSize="28sp"
                   android:textStyle="bold" />
 
-                  <TextView
-                      android:id="@+id/tv_speak"
-                      android:layout_width="64dp"
-                      android:layout_height="64dp"
-                      android:layout_marginLeft="6dp"
-                      android:background="@drawable/widget_opt_bg"
-                      android:gravity="center"
-                      android:text="🔊"
-                      android:textColor="#FDE68A"
-                      android:textSize="30sp" />
-              </LinearLayout>
+              <TextView
+                  android:id="@+id/tv_speak"
+                  android:layout_width="110dp"
+                  android:layout_height="48dp"
+                  android:layout_gravity="center_horizontal"
+                  android:background="@drawable/widget_opt_bg"
+                  android:gravity="center"
+                  android:text="🔊"
+                  android:textColor="#FDE68A"
+                  android:textSize="28sp" />
 
               <TextView
                   android:id="@+id/tv_pron"
