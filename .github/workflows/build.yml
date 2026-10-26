@@ -1,0 +1,1970 @@
+name: Build APK Tu Vung
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tao ma nguon du an
+        run: |
+          mkdir -p "$HOME/proj" && cd "$HOME/proj"
+          mkdir -p "app"
+          cat > "app/build.gradle" <<'AMLICH_EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'vn.tuvung.app'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "vn.tuvung.app"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              signingConfigs {
+                  debug {
+                      storeFile rootProject.file('debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+              lint {
+                  abortOnError false
+                  checkReleaseBuilds false
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main"
+          cat > "app/src/main/AndroidManifest.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.TTS_SERVICE" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <activity
+                      android:name=".LessonActivity"
+                      android:exported="false" />
+
+                  <activity
+                      android:name=".PracticeActivity"
+                      android:exported="false"
+                      android:windowSoftInputMode="adjustResize" />
+
+                  <receiver
+                      android:name=".VocabWidgetProvider"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.appwidget.provider"
+                          android:resource="@xml/widget_vocab_info" />
+                  </receiver>
+              </application>
+          </manifest>
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/LessonActivity.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.Toast
+
+          class LessonActivity : Activity() {
+              private lateinit var content: LinearLayout
+              private var lid = 0
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  lid = intent.getIntExtra("id", 0)
+                  val sv = ScrollView(this)
+                  sv.setBackgroundColor(Color.parseColor("#F3F4F6"))
+                  content = LinearLayout(this)
+                  content.orientation = LinearLayout.VERTICAL
+                  val pad = Ui.dp(this, 16)
+                  content.setPadding(pad, pad, pad, pad)
+                  sv.addView(content)
+                  setContentView(sv)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  render()
+              }
+
+              private fun lp(top: Int = 0, weight: Float = 0f): LinearLayout.LayoutParams {
+                  val p = if (weight > 0f) LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight)
+                  else LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  p.topMargin = Ui.dp(this, top)
+                  return p
+              }
+
+              private fun render() {
+                  content.removeAllViews()
+                  val l = Vocab.all(this).getOrNull(lid) ?: return
+                  content.addView(Ui.tv(this, "Bài ${l.id + 1}: ${l.title}", 22f, Color.parseColor("#111827"), true))
+                  content.addView(
+                      Ui.tv(this, "${l.level} • ${Store.doneCount(this, l)}/${l.words.size} từ xong", 13f, Color.parseColor("#6B7280")),
+                      lp(4)
+                  )
+
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  val b1 = Ui.btn(this, "Luyện tập", Color.parseColor("#2563EB")) {
+                      val i = Intent(this, PracticeActivity::class.java)
+                      i.putExtra("id", lid)
+                      startActivity(i)
+                  }
+                  val b2 = Ui.btn(this, "★ Dùng cho widget", Color.parseColor("#059669")) {
+                      if (Store.lessonComplete(this, l)) {
+                          Toast.makeText(this, "Bài này đã hoàn thành, hãy bấm Làm lại", Toast.LENGTH_SHORT).show()
+                      } else {
+                          Store.setCurrent(this, lid)
+                          Quiz.generate(this)
+                          VocabWidgetProvider.updateAll(this)
+                          Toast.makeText(this, "Widget sẽ dùng bài này", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+                  val pl = lp(0, 1f)
+                  pl.rightMargin = Ui.dp(this, 6)
+                  val pr = lp(0, 1f)
+                  pr.leftMargin = Ui.dp(this, 6)
+                  row.addView(b1, pl)
+                  row.addView(b2, pr)
+                  content.addView(row, lp(12))
+
+                  content.addView(Ui.btn(this, "Làm lại bài này", Color.parseColor("#DC2626")) {
+                      Store.resetLesson(this, l)
+                      Quiz.generate(this)
+                      VocabWidgetProvider.updateAll(this)
+                      render()
+                  }, lp(8))
+
+                  content.addView(Ui.tv(this, "Chạm vào từ để nghe phát âm", 12f, Color.parseColor("#6B7280")), lp(12))
+
+                  for (w in l.words) {
+                      val n = Store.count(this, w)
+                      val box = LinearLayout(this)
+                      box.orientation = LinearLayout.VERTICAL
+                      val p = Ui.dp(this, 10)
+                      box.setPadding(p, p, p, p)
+                      box.background = Ui.bg(this, Color.WHITE, 10, Color.parseColor("#E5E7EB"))
+                      val status = if (n >= Store.GOAL) "✓ xong" else "●".repeat(n) + "○".repeat(Store.GOAL - n)
+                      box.addView(Ui.tv(this, w.en, 17f, Color.parseColor("#111827"), true))
+                      box.addView(Ui.tv(this, w.vi.replace(";", " /"), 14f, Color.parseColor("#374151")), lp(2))
+                      box.addView(
+                          Ui.tv(this, status, 12f, if (n >= Store.GOAL) Color.parseColor("#059669") else Color.parseColor("#9CA3AF")),
+                          lp(2)
+                      )
+                      box.isClickable = true
+                      box.setOnClickListener { Speaker.speak(this, w.en) }
+                      content.addView(box, lp(6))
+                  }
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/MainActivity.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.app.Activity
+          import android.appwidget.AppWidgetManager
+          import android.content.ComponentName
+          import android.content.Intent
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class MainActivity : Activity() {
+              private lateinit var content: LinearLayout
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val sv = ScrollView(this)
+                  sv.setBackgroundColor(Color.parseColor("#F3F4F6"))
+                  content = LinearLayout(this)
+                  content.orientation = LinearLayout.VERTICAL
+                  val pad = Ui.dp(this, 16)
+                  content.setPadding(pad, pad, pad, pad)
+                  sv.addView(content)
+                  setContentView(sv)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  render()
+              }
+
+              private fun lp(top: Int = 0): LinearLayout.LayoutParams {
+                  val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  p.topMargin = Ui.dp(this, top)
+                  return p
+              }
+
+              private fun render() {
+                  content.removeAllViews()
+                  val lessons = Vocab.all(this)
+                  val total = Vocab.totalWords(this)
+                  val done = Store.totalDone(this)
+
+                  content.addView(Ui.tv(this, "Từ Vựng Tiếng Anh", 26f, Color.parseColor("#111827"), true))
+                  content.addView(Ui.tv(this, "Đã thuộc $done/$total từ • ${lessons.size} bài", 14f, Color.parseColor("#4B5563")), lp(4))
+
+                  content.addView(Ui.btn(this, "➕ Thêm widget ra màn hình chính", Color.parseColor("#2563EB")) { addWidget() }, lp(14))
+
+                  content.addView(
+                      Ui.tv(this, "Mỗi từ trả lời đúng ${Store.GOAL} lần là xong. Widget chỉ hiện từ của bài đang chọn (★) cho đến khi hết bài rồi tự sang bài kế.", 12f, Color.parseColor("#6B7280")),
+                      lp(8)
+                  )
+
+                  val cur = Store.currentLesson(this)
+                  var lastLevel = ""
+                  for (l in lessons) {
+                      if (l.level != lastLevel) {
+                          lastLevel = l.level
+                          content.addView(Ui.tv(this, l.level.uppercase(), 13f, Color.parseColor("#2563EB"), true), lp(20))
+                      }
+                      val d = Store.doneCount(this, l)
+                      val full = Store.lessonComplete(this, l)
+                      val box = LinearLayout(this)
+                      box.orientation = LinearLayout.VERTICAL
+                      val p = Ui.dp(this, 12)
+                      box.setPadding(p, p, p, p)
+                      val stroke = if (l.id == cur) Color.parseColor("#2563EB") else Color.parseColor("#E5E7EB")
+                      box.background = Ui.bg(this, Color.WHITE, 12, stroke)
+                      val star = if (l.id == cur) "★ " else ""
+                      val tick = if (full) " ✓" else ""
+                      box.addView(Ui.tv(this, "$star" + "Bài ${l.id + 1}: ${l.title}$tick", 16f, Color.parseColor("#111827"), true))
+                      val sub: TextView = Ui.tv(this, "$d/${l.words.size} từ xong", 12f, Color.parseColor("#6B7280"))
+                      box.addView(sub, lp(2))
+                      box.isClickable = true
+                      box.setOnClickListener {
+                          val i = Intent(this, LessonActivity::class.java)
+                          i.putExtra("id", l.id)
+                          startActivity(i)
+                      }
+                      content.addView(box, lp(8))
+                  }
+              }
+
+              private fun addWidget() {
+                  val mgr = AppWidgetManager.getInstance(this)
+                  if (mgr.isRequestPinAppWidgetSupported) {
+                      mgr.requestPinAppWidget(ComponentName(this, VocabWidgetProvider::class.java), null, null)
+                  } else {
+                      Toast.makeText(this, "Nhấn giữ màn hình chính → Widget → Từ Vựng", Toast.LENGTH_LONG).show()
+                  }
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/PracticeActivity.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.app.Activity
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.text.InputType
+          import android.view.Gravity
+          import android.view.View
+          import android.view.inputmethod.EditorInfo
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class PracticeActivity : Activity() {
+              private var lid = 0
+              private var cur: Word? = null
+              private var answered = false
+              private var finished = false
+              private var lastIdx = -1
+
+              private lateinit var tvProgress: TextView
+              private lateinit var tvWord: TextView
+              private lateinit var etAns: EditText
+              private lateinit var tvResult: TextView
+              private lateinit var btnMain: TextView
+              private lateinit var btnHint: TextView
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  lid = intent.getIntExtra("id", 0)
+
+                  val sv = ScrollView(this)
+                  sv.setBackgroundColor(Color.parseColor("#F3F4F6"))
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  val pad = Ui.dp(this, 16)
+                  root.setPadding(pad, pad, pad, pad)
+                  sv.addView(root)
+
+                  val l = Vocab.all(this).getOrNull(lid)
+                  root.addView(Ui.tv(this, "Luyện tập – Bài ${lid + 1}: ${l?.title ?: ""}", 16f, Color.parseColor("#111827"), true))
+                  tvProgress = Ui.tv(this, "", 13f, Color.parseColor("#6B7280"))
+                  root.addView(tvProgress, lp(4))
+
+                  tvWord = Ui.tv(this, "", 30f, Color.parseColor("#1D4ED8"), true)
+                  tvWord.gravity = Gravity.CENTER
+                  tvWord.setPadding(0, Ui.dp(this, 28), 0, Ui.dp(this, 8))
+                  tvWord.setOnClickListener { cur?.let { Speaker.speak(this, it.en) } }
+                  root.addView(tvWord, lp())
+                  root.addView(
+                      Ui.tv(this, "Gõ nghĩa tiếng Việt (có dấu hay không dấu đều được)", 12f, Color.parseColor("#6B7280")).also { it.gravity = Gravity.CENTER },
+                      lp()
+                  )
+
+                  etAns = EditText(this)
+                  etAns.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                  etAns.imeOptions = EditorInfo.IME_ACTION_DONE
+                  etAns.setSingleLine(true)
+                  etAns.textSize = 18f
+                  etAns.setTextColor(Color.parseColor("#111827"))
+                  etAns.background = Ui.bg(this, Color.WHITE, 10, Color.parseColor("#D1D5DB"))
+                  val ep = Ui.dp(this, 12)
+                  etAns.setPadding(ep, ep, ep, ep)
+                  etAns.setOnEditorActionListener { _, _, _ ->
+                      onMain()
+                      true
+                  }
+                  root.addView(etAns, lp(14))
+
+                  tvResult = Ui.tv(this, "", 16f, Color.parseColor("#111827"), true)
+                  tvResult.gravity = Gravity.CENTER
+                  root.addView(tvResult, lp(12))
+
+                  btnMain = Ui.btn(this, "Kiểm tra", Color.parseColor("#2563EB")) { onMain() }
+                  root.addView(btnMain, lp(14))
+                  btnHint = Ui.btn(this, "Gợi ý", Color.parseColor("#6B7280")) { hint() }
+                  root.addView(btnHint, lp(8))
+
+                  setContentView(sv)
+                  next()
+              }
+
+              private fun lp(top: Int = 0): LinearLayout.LayoutParams {
+                  val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  p.topMargin = Ui.dp(this, top)
+                  return p
+              }
+
+              private fun updateProgress() {
+                  val l = Vocab.all(this)[lid]
+                  val w = cur
+                  val c = if (w != null) Store.count(this, w) else 0
+                  tvProgress.text = "Xong ${Store.doneCount(this, l)}/${l.words.size} từ • từ này $c/${Store.GOAL}"
+              }
+
+              private fun next() {
+                  answered = false
+                  etAns.setText("")
+                  tvResult.text = ""
+                  btnMain.text = "Kiểm tra"
+                  val w = Quiz.pickWord(this, lid, lastIdx)
+                  if (w == null) {
+                      finished = true
+                      cur = null
+                      tvWord.text = "🎉 Hoàn thành bài!"
+                      tvWord.textSize = 24f
+                      etAns.visibility = View.GONE
+                      btnHint.visibility = View.GONE
+                      btnMain.text = "Đóng"
+                      updateProgress()
+                      return
+                  }
+                  cur = w
+                  lastIdx = w.idx
+                  tvWord.text = w.en
+                  updateProgress()
+                  Speaker.speak(this, w.en)
+              }
+
+              private fun onMain() {
+                  if (finished) {
+                      finish()
+                      return
+                  }
+                  if (answered) {
+                      next()
+                      return
+                  }
+                  val w = cur ?: return
+                  val input = etAns.text.toString()
+                  if (input.isBlank()) {
+                      Toast.makeText(this, "Hãy nhập đáp án", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+                  val ok = Text.matches(input, w)
+                  Quiz.applyAnswer(this, w, ok)
+                  Quiz.generate(this)
+                  VocabWidgetProvider.updateAll(this)
+                  answered = true
+                  if (ok) {
+                      tvResult.setTextColor(Color.parseColor("#059669"))
+                      tvResult.text = "✔ Đúng! ${w.en} = ${w.vi.replace(";", " /")}"
+                  } else {
+                      tvResult.setTextColor(Color.parseColor("#DC2626"))
+                      tvResult.text = "✘ Đáp án: ${w.vi.replace(";", " /")}"
+                  }
+                  btnMain.text = "Tiếp theo"
+                  updateProgress()
+              }
+
+              private fun hint() {
+                  val w = cur ?: return
+                  if (answered) return
+                  tvResult.setTextColor(Color.parseColor("#6B7280"))
+                  tvResult.text = "Gợi ý: " + w.primary.split(" ").joinToString(" ") { it.take(1) + "…" }
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/Quiz.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.content.Context
+          import android.content.SharedPreferences
+          import kotlin.random.Random
+
+          object Quiz {
+              private const val SEP = "\u0001"
+
+              class Q(val lesson: Int, val idx: Int, val serial: Int, val opts: List<String>, val correct: String)
+
+              private fun p(ctx: Context): SharedPreferences =
+                  ctx.applicationContext.getSharedPreferences("vocab_quiz", Context.MODE_PRIVATE)
+
+              fun feedback(ctx: Context): String = p(ctx).getString("fb", "") ?: ""
+              fun feedbackOk(ctx: Context): Boolean = p(ctx).getBoolean("fbOk", true)
+
+              fun pickWord(ctx: Context, lessonId: Int, avoidIdx: Int): Word? {
+                  val l = Vocab.all(ctx).getOrNull(lessonId) ?: return null
+                  var cands = l.words.filter { !Store.isDone(ctx, it) }
+                  if (cands.size > 1) cands = cands.filter { it.idx != avoidIdx }
+                  if (cands.isEmpty()) return null
+                  val weights = cands.map { w ->
+                      var x = Store.GOAL - Store.count(ctx, w) + 1
+                      if (Store.boosted(ctx, w)) x *= 3
+                      x
+                  }
+                  var r = Random.nextInt(weights.sum())
+                  for (i in cands.indices) {
+                      r -= weights[i]
+                      if (r < 0) return cands[i]
+                  }
+                  return cands.last()
+              }
+
+              private fun readQ(ctx: Context): Q? {
+                  val sp = p(ctx)
+                  val lesson = sp.getInt("q_lesson", -1)
+                  if (lesson < 0) return null
+                  val opts = (sp.getString("q_opts", "") ?: "").split(SEP).filter { it.isNotEmpty() }
+                  if (opts.size < 2) return null
+                  return Q(lesson, sp.getInt("q_idx", 0), sp.getInt("q_serial", 0), opts, sp.getString("q_correct", "") ?: "")
+              }
+
+              fun current(ctx: Context): Q? {
+                  if (Store.allComplete(ctx)) return null
+                  val q = readQ(ctx)
+                  if (q != null && q.lesson == Store.currentLesson(ctx)) {
+                      val w = Vocab.all(ctx).getOrNull(q.lesson)?.words?.getOrNull(q.idx)
+                      if (w != null && !Store.isDone(ctx, w)) return q
+                  }
+                  return generate(ctx)
+              }
+
+              fun generate(ctx: Context): Q? {
+                  val lessons = Vocab.all(ctx)
+                  if (lessons.isEmpty()) return null
+                  var cur = Store.currentLesson(ctx)
+                  if (Store.lessonComplete(ctx, lessons[cur])) {
+                      val n = Store.nextIncompleteLesson(ctx, cur)
+                      if (n < 0) {
+                          p(ctx).edit().putInt("q_lesson", -1).apply()
+                          return null
+                      }
+                      cur = n
+                      Store.setCurrent(ctx, n)
+                  }
+                  val sp = p(ctx)
+                  val last = if (sp.getInt("q_lesson", -1) == cur) sp.getInt("q_last", -1) else -1
+                  val w = pickWord(ctx, cur, last) ?: return null
+
+                  val bad = HashSet<String>()
+                  for (a in w.alts) bad.add(Text.norm(a))
+                  val chosen = ArrayList<String>()
+                  fun take(pool: List<Word>) {
+                      for (d in pool.shuffled()) {
+                          if (chosen.size >= 3) return
+                          if (d.lessonId == w.lessonId && d.idx == w.idx) continue
+                          val n = Text.norm(d.primary)
+                          if (n.isEmpty() || n in bad) continue
+                          bad.add(n)
+                          chosen.add(d.primary)
+                      }
+                  }
+                  take(lessons[cur].words)
+                  if (chosen.size < 3) take(lessons.flatMap { it.words })
+
+                  val opts = ArrayList<String>(chosen)
+                  opts.add(w.primary)
+                  opts.shuffle()
+                  val serial = sp.getInt("q_serial", 0) + 1
+                  sp.edit()
+                      .putInt("q_lesson", cur)
+                      .putInt("q_idx", w.idx)
+                      .putInt("q_serial", serial)
+                      .putString("q_opts", opts.joinToString(SEP))
+                      .putString("q_correct", w.primary)
+                      .apply()
+                  return Q(cur, w.idx, serial, opts, w.primary)
+              }
+
+              fun answer(ctx: Context, serial: Int, choice: Int) {
+                  val q = readQ(ctx) ?: return
+                  if (q.serial != serial) return
+                  val w = Vocab.all(ctx).getOrNull(q.lesson)?.words?.getOrNull(q.idx) ?: return
+                  val ok = q.opts.getOrNull(choice) == q.correct
+                  applyAnswer(ctx, w, ok)
+                  p(ctx).edit().putInt("q_last", w.idx).apply()
+                  generate(ctx)
+              }
+
+              fun skip(ctx: Context, serial: Int) {
+                  val q = readQ(ctx) ?: return
+                  if (q.serial != serial) return
+                  val w = Vocab.all(ctx).getOrNull(q.lesson)?.words?.getOrNull(q.idx) ?: return
+                  p(ctx).edit()
+                      .putString("fb", "⏭ ${w.en} = ${w.primary}")
+                      .putBoolean("fbOk", true)
+                      .putInt("q_last", w.idx)
+                      .apply()
+                  generate(ctx)
+              }
+
+              fun applyAnswer(ctx: Context, w: Word, ok: Boolean): String {
+                  val l = Vocab.all(ctx)[w.lessonId]
+                  val msg: String
+                  if (ok) {
+                      val n = Store.correct(ctx, w)
+                      var m = "✔ ${w.en} = ${w.primary} ($n/${Store.GOAL})"
+                      if (n >= Store.GOAL) m += " – xong!"
+                      if (Store.lessonComplete(ctx, l)) {
+                          m = "🎉 Hoàn thành bài ${l.id + 1}!"
+                          if (Store.currentLesson(ctx) == l.id) {
+                              val nx = Store.nextIncompleteLesson(ctx, l.id)
+                              if (nx >= 0) {
+                                  Store.setCurrent(ctx, nx)
+                                  m += " Sang bài ${nx + 1}"
+                              } else {
+                                  m += " Bạn đã xong tất cả!"
+                              }
+                          }
+                      }
+                      msg = m
+                  } else {
+                      Store.wrong(ctx, w)
+                      msg = "✘ ${w.en} = ${w.primary}"
+                  }
+                  p(ctx).edit().putString("fb", msg).putBoolean("fbOk", ok).apply()
+                  return msg
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/Speaker.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.content.Context
+          import android.speech.tts.TextToSpeech
+          import java.util.Locale
+
+          object Speaker {
+              private var tts: TextToSpeech? = null
+              private var ready = false
+              private var pending: String? = null
+
+              fun speak(ctx: Context, text: String) {
+                  val t = tts
+                  if (t == null) {
+                      pending = text
+                      tts = TextToSpeech(ctx.applicationContext) { status ->
+                          if (status == TextToSpeech.SUCCESS) {
+                              tts?.language = Locale.US
+                              ready = true
+                              pending?.let { tts?.speak(it, TextToSpeech.QUEUE_FLUSH, null, "u") }
+                              pending = null
+                          }
+                      }
+                  } else if (ready) {
+                      t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
+                  } else {
+                      pending = text
+                  }
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/Store.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.content.Context
+          import android.content.SharedPreferences
+
+          object Store {
+              const val GOAL = 5
+
+              private fun p(ctx: Context): SharedPreferences =
+                  ctx.applicationContext.getSharedPreferences("vocab_progress", Context.MODE_PRIVATE)
+
+              private fun key(w: Word) = "${w.lessonId}_${w.idx}"
+
+              fun count(ctx: Context, w: Word): Int = p(ctx).getInt("c_" + key(w), 0)
+              fun isDone(ctx: Context, w: Word): Boolean = count(ctx, w) >= GOAL
+              fun boosted(ctx: Context, w: Word): Boolean = p(ctx).getBoolean("w_" + key(w), false)
+
+              fun correct(ctx: Context, w: Word): Int {
+                  val n = (count(ctx, w) + 1).coerceAtMost(GOAL)
+                  p(ctx).edit().putInt("c_" + key(w), n).putBoolean("w_" + key(w), false).apply()
+                  return n
+              }
+
+              fun wrong(ctx: Context, w: Word) {
+                  p(ctx).edit().putBoolean("w_" + key(w), true).apply()
+              }
+
+              fun currentLesson(ctx: Context): Int {
+                  val n = Vocab.all(ctx).size
+                  return p(ctx).getInt("cur", 0).coerceIn(0, (n - 1).coerceAtLeast(0))
+              }
+
+              fun setCurrent(ctx: Context, id: Int) {
+                  p(ctx).edit().putInt("cur", id).apply()
+              }
+
+              fun doneCount(ctx: Context, l: Lesson): Int = l.words.count { isDone(ctx, it) }
+              fun lessonComplete(ctx: Context, l: Lesson): Boolean = l.words.all { isDone(ctx, it) }
+
+              fun totalDone(ctx: Context): Int = Vocab.all(ctx).sumOf { doneCount(ctx, it) }
+
+              fun nextIncompleteLesson(ctx: Context, after: Int): Int {
+                  val ls = Vocab.all(ctx)
+                  val n = ls.size
+                  for (i in 1..n) {
+                      val j = ((after + i) % n + n) % n
+                      if (!lessonComplete(ctx, ls[j])) return j
+                  }
+                  return -1
+              }
+
+              fun allComplete(ctx: Context): Boolean = Vocab.all(ctx).all { lessonComplete(ctx, it) }
+
+              fun resetLesson(ctx: Context, l: Lesson) {
+                  val e = p(ctx).edit()
+                  for (w in l.words) {
+                      e.remove("c_" + key(w))
+                      e.remove("w_" + key(w))
+                  }
+                  e.apply()
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/Text.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.content.Context
+          import android.graphics.Color
+          import android.graphics.Typeface
+          import android.graphics.drawable.GradientDrawable
+          import android.view.Gravity
+          import android.view.View
+          import android.widget.TextView
+          import java.text.Normalizer
+
+          object Text {
+              private val marks = Regex("\\p{Mn}+")
+              private val junk = Regex("[^a-z0-9 ]")
+              private val spaces = Regex("\\s+")
+              private val paren = Regex("\\([^)]*\\)")
+
+              fun norm(s: String): String {
+                  var t = s.lowercase().replace("đ", "d")
+                  t = Normalizer.normalize(t, Normalizer.Form.NFD).replace(marks, "")
+                  t = t.replace(junk, " ").replace(spaces, " ").trim()
+                  return t
+              }
+
+              fun distance(a: String, b: String): Int {
+                  if (a == b) return 0
+                  if (a.isEmpty()) return b.length
+                  if (b.isEmpty()) return a.length
+                  var prev = IntArray(b.length + 1) { it }
+                  var cur = IntArray(b.length + 1)
+                  for (i in 1..a.length) {
+                      cur[0] = i
+                      for (j in 1..b.length) {
+                          val c = if (a[i - 1] == b[j - 1]) 0 else 1
+                          cur[j] = minOf(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + c)
+                      }
+                      val t = prev; prev = cur; cur = t
+                  }
+                  return prev[b.length]
+              }
+
+              fun matches(input: String, w: Word): Boolean {
+                  val n = norm(input)
+                  if (n.isEmpty()) return false
+                  for (alt in w.alts) {
+                      val variants = listOf(alt, alt.replace(paren, " "))
+                      for (v in variants) {
+                          val a = norm(v)
+                          if (a.isEmpty()) continue
+                          if (distance(n, a) <= a.length / 8) return true
+                      }
+                  }
+                  return false
+              }
+          }
+
+          object Ui {
+              fun dp(ctx: Context, v: Int): Int = (v * ctx.resources.displayMetrics.density + 0.5f).toInt()
+
+              fun bg(ctx: Context, color: Int, radiusDp: Int, strokeColor: Int = 0): GradientDrawable {
+                  val d = GradientDrawable()
+                  d.setColor(color)
+                  d.cornerRadius = dp(ctx, radiusDp).toFloat()
+                  if (strokeColor != 0) d.setStroke(dp(ctx, 1), strokeColor)
+                  return d
+              }
+
+              fun tv(ctx: Context, text: String, sp: Float, color: Int, bold: Boolean = false): TextView {
+                  val t = TextView(ctx)
+                  t.text = text
+                  t.textSize = sp
+                  t.setTextColor(color)
+                  if (bold) t.setTypeface(t.typeface, Typeface.BOLD)
+                  return t
+              }
+
+              fun btn(ctx: Context, text: String, color: Int, onClick: () -> Unit): TextView {
+                  val t = tv(ctx, text, 15f, Color.WHITE, true)
+                  t.gravity = Gravity.CENTER
+                  t.setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+                  t.background = bg(ctx, color, 12)
+                  t.isClickable = true
+                  t.setOnClickListener { _: View -> onClick() }
+                  return t
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/Vocab.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.content.Context
+
+          class Word(val lessonId: Int, val idx: Int, val en: String, val vi: String) {
+              val alts: List<String> = vi.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+              val primary: String get() = alts.firstOrNull() ?: vi
+          }
+
+          class Lesson(val id: Int, val level: String, val title: String) {
+              val words = ArrayList<Word>()
+          }
+
+          object Vocab {
+              private var cache: List<Lesson>? = null
+
+              fun all(ctx: Context): List<Lesson> {
+                  cache?.let { return it }
+                  val res = ArrayList<Lesson>()
+                  ctx.applicationContext.resources.openRawResource(R.raw.vocab)
+                      .bufferedReader(Charsets.UTF_8).useLines { lines ->
+                          var cur: Lesson? = null
+                          for (raw in lines) {
+                              val line = raw.trim()
+                              if (line.isEmpty()) continue
+                              if (line.startsWith("#")) {
+                                  val p = line.substring(1).split("|", limit = 2)
+                                  val l = Lesson(res.size, p[0].trim(), p.getOrElse(1) { "" }.trim())
+                                  res.add(l)
+                                  cur = l
+                              } else {
+                                  val c = cur ?: continue
+                                  val p = line.split("|", limit = 2)
+                                  if (p.size == 2) c.words.add(Word(c.id, c.words.size, p[0].trim(), p[1].trim()))
+                              }
+                          }
+                      }
+                  cache = res
+                  return res
+              }
+
+              fun totalWords(ctx: Context): Int = all(ctx).sumOf { it.words.size }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/VocabWidgetProvider.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Color
+          import android.net.Uri
+          import android.os.Bundle
+          import android.util.TypedValue
+          import android.view.View
+          import android.widget.RemoteViews
+
+          class VocabWidgetProvider : AppWidgetProvider() {
+
+              override fun onUpdate(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
+                  for (id in ids) mgr.updateAppWidget(id, build(ctx, mgr, id))
+              }
+
+              override fun onAppWidgetOptionsChanged(ctx: Context, mgr: AppWidgetManager, id: Int, newOptions: Bundle) {
+                  mgr.updateAppWidget(id, build(ctx, mgr, id))
+              }
+
+              override fun onReceive(ctx: Context, intent: Intent) {
+                  when (intent.action) {
+                      ACTION_ANSWER -> {
+                          Quiz.answer(ctx, intent.getIntExtra("serial", -1), intent.getIntExtra("choice", -1))
+                          updateAll(ctx)
+                      }
+                      ACTION_SKIP -> {
+                          Quiz.skip(ctx, intent.getIntExtra("serial", -1))
+                          updateAll(ctx)
+                      }
+                      else -> super.onReceive(ctx, intent)
+                  }
+              }
+
+              companion object {
+                  const val ACTION_ANSWER = "vn.tuvung.app.ANSWER"
+                  const val ACTION_SKIP = "vn.tuvung.app.SKIP"
+
+                  fun updateAll(ctx: Context) {
+                      val mgr = AppWidgetManager.getInstance(ctx)
+                      val ids = mgr.getAppWidgetIds(ComponentName(ctx, VocabWidgetProvider::class.java))
+                      for (id in ids) mgr.updateAppWidget(id, build(ctx, mgr, id))
+                  }
+
+                  private fun broadcast(ctx: Context, action: String, id: Int, slot: Int, serial: Int, choice: Int): PendingIntent {
+                      val i = Intent(ctx, VocabWidgetProvider::class.java)
+                      i.action = action
+                      i.data = Uri.parse("tuvung://w/$id/$slot")
+                      i.putExtra("serial", serial)
+                      i.putExtra("choice", choice)
+                      return PendingIntent.getBroadcast(
+                          ctx, id * 10 + slot, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                      )
+                  }
+
+                  fun build(ctx: Context, mgr: AppWidgetManager, id: Int): RemoteViews {
+                      val rv = RemoteViews(ctx.packageName, R.layout.widget_vocab)
+                      val o = mgr.getAppWidgetOptions(id)
+                      val w = o.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
+                      val h = o.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 180)
+
+                      val openApp = PendingIntent.getActivity(
+                          ctx, 9990 + id, Intent(ctx, MainActivity::class.java),
+                          PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                      )
+                      rv.setOnClickPendingIntent(R.id.tv_lesson, openApp)
+
+                      val lessons = Vocab.all(ctx)
+                      val q = Quiz.current(ctx)
+                      val opts = intArrayOf(R.id.opt0, R.id.opt1, R.id.opt2, R.id.opt3)
+
+                      var wordSp = minOf(w / 9.0, h / 6.0).toFloat().coerceIn(16f, 38f)
+                      rv.setViewVisibility(R.id.tv_info, if (h < 150) View.GONE else View.VISIBLE)
+
+                      if (q == null) {
+                          rv.setTextViewText(R.id.tv_lesson, "Từ vựng tiếng Anh")
+                          rv.setTextViewText(R.id.tv_skip, "")
+                          rv.setTextViewText(R.id.tv_feedback, "")
+                          rv.setTextViewText(R.id.tv_word, "🎉 Bạn đã hoàn thành tất cả các bài!")
+                          rv.setTextViewTextSize(R.id.tv_word, TypedValue.COMPLEX_UNIT_SP, (wordSp * 0.6f).coerceAtLeast(14f))
+                          rv.setTextViewText(R.id.tv_info, "Mở app để làm lại bài")
+                          rv.setViewVisibility(R.id.row1, View.GONE)
+                          rv.setViewVisibility(R.id.row2, View.GONE)
+                          return rv
+                      }
+
+                      val l = lessons[q.lesson]
+                      val word = l.words[q.idx]
+                      rv.setViewVisibility(R.id.row1, View.VISIBLE)
+                      rv.setViewVisibility(R.id.row2, View.VISIBLE)
+                      rv.setTextViewText(R.id.tv_lesson, "Bài ${l.id + 1}: ${l.title}")
+                      rv.setTextViewText(R.id.tv_skip, "Bỏ qua ⏭")
+                      rv.setOnClickPendingIntent(R.id.tv_skip, broadcast(ctx, ACTION_SKIP, id, 5, q.serial, 0))
+
+                      val fb = Quiz.feedback(ctx)
+                      rv.setTextViewText(R.id.tv_feedback, fb)
+                      rv.setTextColor(R.id.tv_feedback, if (Quiz.feedbackOk(ctx)) Color.parseColor("#86EFAC") else Color.parseColor("#FCA5A5"))
+
+                      if (word.en.length > 24) wordSp *= 0.55f else if (word.en.length > 14) wordSp *= 0.7f
+                      wordSp = wordSp.coerceAtLeast(13f)
+                      rv.setTextViewText(R.id.tv_word, word.en)
+                      rv.setTextViewTextSize(R.id.tv_word, TypedValue.COMPLEX_UNIT_SP, wordSp)
+
+                      val done = Store.doneCount(ctx, l)
+                      rv.setTextViewText(
+                          R.id.tv_info,
+                          "Xong $done/${l.words.size} từ • từ này ${Store.count(ctx, word)}/${Store.GOAL}"
+                      )
+
+                      val optSp = (wordSp * 0.5f).coerceIn(11f, 16f)
+                      for (i in 0 until 4) {
+                          val text = q.opts.getOrNull(i) ?: ""
+                          rv.setTextViewText(opts[i], text)
+                          rv.setTextViewTextSize(opts[i], TypedValue.COMPLEX_UNIT_SP, optSp)
+                          rv.setOnClickPendingIntent(opts[i], broadcast(ctx, ACTION_ANSWER, id, i, q.serial, i))
+                      }
+                      return rv
+                  }
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/drawable"
+          cat > "app/src/main/res/drawable/ic_launcher.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#2563EB"
+                  android:pathData="M18,0 L90,0 A18,18 0 0 1 108,18 L108,90 A18,18 0 0 1 90,108 L18,108 A18,18 0 0 1 0,90 L0,18 A18,18 0 0 1 18,0 Z" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M24,30 L52,36 L52,82 L24,76 Z" />
+              <path
+                  android:fillColor="#DBEAFE"
+                  android:pathData="M84,30 L56,36 L56,82 L84,76 Z" />
+              <path
+                  android:fillColor="#00000000"
+                  android:pathData="M31,46 L45,49 M31,56 L45,59 M31,66 L45,69"
+                  android:strokeColor="#2563EB"
+                  android:strokeLineCap="round"
+                  android:strokeWidth="3" />
+          </vector>
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/drawable"
+          cat > "app/src/main/res/drawable/widget_bg.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <solid android:color="#F21F2937" />
+              <corners android:radius="22dp" />
+          </shape>
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/drawable"
+          cat > "app/src/main/res/drawable/widget_opt_bg.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <solid android:color="#374151" />
+              <corners android:radius="12dp" />
+          </shape>
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/layout"
+          cat > "app/src/main/res/layout/widget_vocab.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/widget_root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@drawable/widget_bg"
+              android:orientation="vertical"
+              android:padding="10dp">
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal">
+
+                  <TextView
+                      android:id="@+id/tv_lesson"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:ellipsize="end"
+                      android:singleLine="true"
+                      android:text="Từ vựng"
+                      android:textColor="#93C5FD"
+                      android:textSize="12sp"
+                      android:textStyle="bold" />
+
+                  <TextView
+                      android:id="@+id/tv_skip"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:paddingLeft="8dp"
+                      android:text="Bỏ qua ⏭"
+                      android:textColor="#9CA3AF"
+                      android:textSize="12sp" />
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/tv_feedback"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:ellipsize="end"
+                  android:singleLine="true"
+                  android:textColor="#86EFAC"
+                  android:textSize="12sp" />
+
+              <TextView
+                  android:id="@+id/tv_word"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:gravity="center"
+                  android:text="Từ vựng"
+                  android:textColor="#FFFFFF"
+                  android:textSize="28sp"
+                  android:textStyle="bold" />
+
+              <TextView
+                  android:id="@+id/tv_info"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:gravity="center"
+                  android:paddingBottom="4dp"
+                  android:textColor="#9CA3AF"
+                  android:textSize="11sp" />
+
+              <LinearLayout
+                  android:id="@+id/row1"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal">
+
+                  <TextView
+                      android:id="@+id/opt0"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_margin="3dp"
+                      android:layout_weight="1"
+                      android:background="@drawable/widget_opt_bg"
+                      android:ellipsize="end"
+                      android:gravity="center"
+                      android:maxLines="2"
+                      android:padding="8dp"
+                      android:textColor="#FFFFFF"
+                      android:textSize="14sp" />
+
+                  <TextView
+                      android:id="@+id/opt1"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_margin="3dp"
+                      android:layout_weight="1"
+                      android:background="@drawable/widget_opt_bg"
+                      android:ellipsize="end"
+                      android:gravity="center"
+                      android:maxLines="2"
+                      android:padding="8dp"
+                      android:textColor="#FFFFFF"
+                      android:textSize="14sp" />
+              </LinearLayout>
+
+              <LinearLayout
+                  android:id="@+id/row2"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal">
+
+                  <TextView
+                      android:id="@+id/opt2"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_margin="3dp"
+                      android:layout_weight="1"
+                      android:background="@drawable/widget_opt_bg"
+                      android:ellipsize="end"
+                      android:gravity="center"
+                      android:maxLines="2"
+                      android:padding="8dp"
+                      android:textColor="#FFFFFF"
+                      android:textSize="14sp" />
+
+                  <TextView
+                      android:id="@+id/opt3"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_margin="3dp"
+                      android:layout_weight="1"
+                      android:background="@drawable/widget_opt_bg"
+                      android:ellipsize="end"
+                      android:gravity="center"
+                      android:maxLines="2"
+                      android:padding="8dp"
+                      android:textColor="#FFFFFF"
+                      android:textSize="14sp" />
+              </LinearLayout>
+          </LinearLayout>
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/raw"
+          cat > "app/src/main/res/raw/vocab.txt" <<'AMLICH_EOF'
+          #Cơ bản|Số đếm và thời gian
+          one|một
+          two|hai
+          three|ba
+          four|bốn
+          five|năm (số 5)
+          six|sáu
+          seven|bảy
+          eight|tám
+          nine|chín
+          ten|mười
+          hundred|trăm
+          thousand|nghìn
+          first|thứ nhất
+          today|hôm nay
+          tomorrow|ngày mai
+          yesterday|hôm qua
+          morning|buổi sáng
+          night|ban đêm
+          week|tuần lễ
+          month|tháng
+
+          #Cơ bản|Gia đình và con người
+          family|gia đình
+          father|bố; cha
+          mother|mẹ; má
+          brother|anh trai; em trai
+          sister|chị gái; em gái
+          son|con trai
+          daughter|con gái
+          grandfather|ông
+          grandmother|bà
+          uncle|chú; bác; cậu
+          aunt|cô; dì; thím
+          cousin|anh chị em họ
+          husband|chồng
+          wife|vợ
+          baby|em bé
+          child|đứa trẻ
+          man|đàn ông
+          woman|phụ nữ
+          friend|bạn bè
+          neighbor|hàng xóm
+
+          #Cơ bản|Đồ ăn
+          bread|bánh mì
+          rice|cơm; gạo
+          noodles|mì; nui
+          meat|thịt
+          chicken|thịt gà
+          beef|thịt bò
+          pork|thịt heo; thịt lợn
+          fish|cá
+          egg|trứng
+          cheese|phô mai
+          butter|bơ (làm từ sữa)
+          soup|súp; canh
+          salad|rau trộn
+          sandwich|bánh sandwich
+          pizza|bánh pizza
+          cake|bánh ngọt
+          sugar|đường
+          salt|muối
+          vegetable|rau củ
+          breakfast|bữa sáng
+
+          #Cơ bản|Đồ uống và trái cây
+          water|nước
+          milk|sữa
+          coffee|cà phê
+          tea|trà
+          juice|nước ép
+          beer|bia
+          wine|rượu vang
+          apple|quả táo
+          banana|quả chuối
+          orange|quả cam
+          grape|quả nho
+          lemon|quả chanh
+          mango|quả xoài
+          strawberry|quả dâu tây
+          watermelon|dưa hấu
+          pineapple|quả dứa; quả thơm
+          coconut|quả dừa
+          peach|quả đào
+          pear|quả lê
+          ice|nước đá
+
+          #Cơ bản|Động vật
+          dog|con chó
+          cat|con mèo
+          bird|con chim
+          horse|con ngựa
+          cow|con bò
+          pig|con heo; con lợn
+          sheep|con cừu
+          duck|con vịt
+          rabbit|con thỏ
+          mouse|con chuột
+          monkey|con khỉ
+          elephant|con voi
+          tiger|con hổ; con cọp
+          lion|con sư tử
+          bear|con gấu
+          snake|con rắn
+          frog|con ếch
+          butterfly|con bướm
+          turtle|con rùa
+          spider|con nhện
+
+          #Cơ bản|Màu sắc và tính từ cơ bản
+          red|màu đỏ
+          blue|màu xanh dương
+          green|màu xanh lá
+          yellow|màu vàng
+          black|màu đen
+          white|màu trắng
+          pink|màu hồng
+          purple|màu tím
+          brown|màu nâu
+          gray|màu xám
+          big|to; lớn
+          small|nhỏ; bé
+          long|dài
+          short|ngắn; thấp
+          hot|nóng
+          cold|lạnh
+          new|mới
+          old|cũ; già
+          good|tốt; hay
+          bad|xấu; tồi
+
+          #Cơ bản|Nhà cửa và đồ vật
+          house|ngôi nhà
+          room|căn phòng
+          door|cửa ra vào
+          window|cửa sổ
+          table|cái bàn
+          chair|cái ghế
+          bed|cái giường
+          kitchen|nhà bếp
+          bathroom|phòng tắm
+          bedroom|phòng ngủ
+          garden|khu vườn
+          roof|mái nhà
+          floor|sàn nhà; tầng
+          wall|bức tường
+          lamp|cái đèn
+          key|chìa khóa
+          phone|điện thoại
+          book|quyển sách
+          clock|đồng hồ treo tường
+          mirror|cái gương
+
+          #Cơ bản|Cơ thể và sức khỏe
+          head|cái đầu
+          face|khuôn mặt
+          eye|con mắt
+          ear|cái tai
+          nose|cái mũi
+          mouth|cái miệng
+          tooth|cái răng
+          hand|bàn tay
+          finger|ngón tay
+          arm|cánh tay
+          leg|cái chân
+          foot|bàn chân
+          heart|trái tim
+          stomach|dạ dày; bụng
+          back|lưng
+          hair|tóc
+          doctor|bác sĩ
+          medicine|thuốc
+          pain|cơn đau
+          sick|bị ốm; bệnh
+
+          #Cơ bản|Quần áo và phụ kiện
+          shirt|áo sơ mi
+          t-shirt|áo thun
+          pants|quần dài
+          jeans|quần bò; quần jean
+          skirt|váy ngắn; chân váy
+          dress|đầm; váy liền
+          jacket|áo khoác
+          coat|áo măng tô
+          hat|cái mũ
+          cap|mũ lưỡi trai
+          shoes|đôi giày
+          socks|đôi tất; đôi vớ
+          boots|đôi ủng
+          gloves|đôi găng tay
+          scarf|khăn quàng cổ
+          belt|thắt lưng
+          tie|cà vạt
+          glasses|kính mắt
+          bag|cái túi
+          umbrella|cái ô; cái dù
+
+          #Cơ bản|Động từ cơ bản (1)
+          be|thì; là; ở
+          have|có
+          go|đi
+          come|đến
+          eat|ăn
+          drink|uống
+          sleep|ngủ
+          walk|đi bộ
+          run|chạy
+          sit|ngồi
+          stand|đứng
+          see|nhìn thấy
+          hear|nghe thấy
+          speak|nói
+          read|đọc
+          write|viết
+          listen|lắng nghe
+          watch|xem
+          open|mở
+          close|đóng
+
+          #Cơ bản|Động từ cơ bản (2)
+          make|tạo ra
+          do|làm
+          take|lấy; cầm
+          give|cho; tặng
+          buy|mua
+          sell|bán
+          cook|nấu ăn
+          wash|rửa; giặt
+          clean|dọn dẹp
+          help|giúp đỡ
+          love|yêu
+          like|thích
+          want|muốn
+          need|cần
+          know|biết
+          think|nghĩ
+          learn|học
+          teach|dạy
+          work|làm việc
+          play|chơi
+
+          #Hội thoại cơ bản|Chào hỏi
+          Hello!|Xin chào!
+          Good morning!|Chào buổi sáng!
+          Good afternoon!|Chào buổi chiều!
+          Good evening!|Chào buổi tối!
+          Good night!|Chúc ngủ ngon!
+          How are you?|Bạn khỏe không?
+          I'm fine, thank you.|Tôi khỏe, cảm ơn bạn.
+          And you?|Còn bạn thì sao?
+          Nice to meet you.|Rất vui được gặp bạn.
+          See you later.|Hẹn gặp lại sau nhé.
+          Goodbye!|Tạm biệt!
+          Take care!|Bảo trọng nhé!
+
+          #Hội thoại cơ bản|Giới thiệu bản thân
+          What's your name?|Bạn tên là gì?
+          My name is Lan.|Tên tôi là Lan.
+          Where are you from?|Bạn đến từ đâu?
+          I'm from Vietnam.|Tôi đến từ Việt Nam.
+          How old are you?|Bạn bao nhiêu tuổi?
+          I am twenty years old.|Tôi hai mươi tuổi.
+          What do you do?|Bạn làm nghề gì?
+          I'm a student.|Tôi là sinh viên.
+          Do you speak English?|Bạn có nói tiếng Anh không?
+          I speak a little English.|Tôi nói được một chút tiếng Anh.
+          Where do you live?|Bạn sống ở đâu?
+          I live in Hanoi.|Tôi sống ở Hà Nội.
+
+          #Hội thoại cơ bản|Lịch sự và xin lỗi
+          Thank you very much.|Cảm ơn bạn rất nhiều.
+          You're welcome.|Không có gì đâu.
+          Please.|Làm ơn.
+          Excuse me.|Xin lỗi, cho tôi hỏi.
+          I'm sorry.|Tôi xin lỗi.
+          That's okay.|Không sao đâu.
+          No problem.|Không vấn đề gì.
+          Can you help me?|Bạn có thể giúp tôi không?
+          Of course.|Tất nhiên rồi.
+          Could you repeat that?|Bạn có thể nhắc lại không?
+          I don't understand.|Tôi không hiểu.
+          Please speak slowly.|Làm ơn nói chậm thôi.
+
+          #Hội thoại cơ bản|Hỏi đường
+          Where is the bathroom?|Nhà vệ sinh ở đâu?
+          How do I get to the station?|Làm sao để đến nhà ga?
+          Turn left.|Rẽ trái.
+          Turn right.|Rẽ phải.
+          Go straight ahead.|Đi thẳng về phía trước.
+          It's near here.|Nó ở gần đây.
+          It's far from here.|Nó ở xa đây.
+          Is it far?|Có xa không?
+          How long does it take?|Mất bao lâu?
+          Can you show me on the map?|Bạn chỉ cho tôi trên bản đồ được không?
+          I'm lost.|Tôi bị lạc.
+          Where is the bus stop?|Trạm xe buýt ở đâu?
+
+          #Hội thoại cơ bản|Ở nhà hàng
+          A table for two, please.|Làm ơn cho một bàn hai người.
+          Can I see the menu?|Cho tôi xem thực đơn được không?
+          What do you recommend?|Bạn gợi ý món nào?
+          I'd like some water.|Tôi muốn một ít nước.
+          I'll have the chicken.|Tôi sẽ gọi món gà.
+          It's delicious.|Món này rất ngon.
+          Can I have the bill?|Cho tôi xin hóa đơn.
+          Is service included?|Đã bao gồm phí phục vụ chưa?
+          I'm allergic to peanuts.|Tôi bị dị ứng với đậu phộng.
+          No spicy food, please.|Làm ơn đừng cho cay.
+          Another drink, please.|Làm ơn cho thêm một ly nữa.
+          Can I pay by card?|Tôi trả bằng thẻ được không?
+
+          #Hội thoại cơ bản|Mua sắm
+          How much is this?|Cái này giá bao nhiêu?
+          It's too expensive.|Nó đắt quá.
+          Do you have a smaller size?|Bạn có cỡ nhỏ hơn không?
+          Can I try it on?|Tôi mặc thử được không?
+          I'm just looking.|Tôi chỉ xem thôi.
+          I'll take it.|Tôi sẽ lấy cái này.
+          Do you accept credit cards?|Bạn có nhận thẻ tín dụng không?
+          Can I get a discount?|Tôi có được giảm giá không?
+          Where is the fitting room?|Phòng thử đồ ở đâu?
+          Do you have this in blue?|Bạn có cái này màu xanh dương không?
+          Can I have a bag?|Cho tôi xin một cái túi.
+          What time do you close?|Mấy giờ bạn đóng cửa?
+
+          #Hội thoại cơ bản|Điện thoại và hẹn gặp
+          Hello, who is this?|A lô, ai đấy ạ?
+          Can I speak to Mr. Nam?|Cho tôi nói chuyện với anh Nam được không?
+          Please hold on.|Xin vui lòng giữ máy.
+          He is not here right now.|Bây giờ anh ấy không có ở đây.
+          Can I leave a message?|Tôi có thể để lại lời nhắn không?
+          I'll call you back.|Tôi sẽ gọi lại cho bạn.
+          Let's meet tomorrow.|Chúng ta gặp nhau vào ngày mai nhé.
+          What time is good for you?|Mấy giờ thì thuận tiện cho bạn?
+          I'm running late.|Tôi đang đến muộn.
+          I'm on my way.|Tôi đang trên đường đến.
+          Sorry, I can't come.|Xin lỗi, tôi không đến được.
+          See you at five o'clock.|Hẹn gặp bạn lúc năm giờ.
+
+          #Hội thoại cơ bản|Khách sạn và tình huống khẩn cấp
+          I have a reservation.|Tôi đã đặt phòng trước.
+          Do you have any rooms available?|Còn phòng trống không?
+          What time is check-out?|Mấy giờ trả phòng?
+          Is breakfast included?|Có bao gồm bữa sáng không?
+          Can I have the Wi-Fi password?|Cho tôi xin mật khẩu Wi-Fi.
+          I need a taxi.|Tôi cần một chiếc taxi.
+          I lost my passport.|Tôi bị mất hộ chiếu.
+          Please call the police.|Làm ơn gọi cảnh sát.
+          I need a doctor.|Tôi cần gặp bác sĩ.
+          Where is the nearest hospital?|Bệnh viện gần nhất ở đâu?
+          I feel sick.|Tôi cảm thấy không khỏe.
+          Help!|Cứu với!
+
+          #Trung cấp|Trường học và học tập
+          teacher|giáo viên
+          student|học sinh
+          classroom|lớp học
+          homework|bài tập về nhà
+          exam|kỳ thi
+          lesson|bài học
+          subject|môn học
+          grade|điểm số
+          library|thư viện
+          notebook|quyển vở
+          pencil|bút chì
+          dictionary|từ điển
+          university|trường đại học
+          degree|bằng cấp
+          scholarship|học bổng
+          lecture|bài giảng
+          question|câu hỏi
+          answer|câu trả lời
+          mistake|lỗi sai
+          knowledge|kiến thức
+
+          #Trung cấp|Công việc và nghề nghiệp
+          job|công việc
+          office|văn phòng
+          manager|quản lý
+          engineer|kỹ sư
+          nurse|y tá
+          farmer|nông dân
+          driver|tài xế
+          chef|đầu bếp
+          lawyer|luật sư
+          salary|tiền lương
+          boss|ông chủ; sếp
+          colleague|đồng nghiệp
+          meeting|cuộc họp
+          interview|buổi phỏng vấn
+          career|sự nghiệp
+          experience|kinh nghiệm
+          skill|kỹ năng
+          retire|nghỉ hưu
+          hire|thuê nhân viên; tuyển dụng
+          resign|từ chức; xin nghỉ việc
+
+          #Trung cấp|Du lịch và giao thông
+          airport|sân bay
+          ticket|vé
+          passport|hộ chiếu
+          luggage|hành lý
+          flight|chuyến bay
+          train|tàu hỏa
+          bus|xe buýt
+          taxi|xe taxi
+          bicycle|xe đạp
+          motorbike|xe máy
+          ship|con tàu
+          map|bản đồ
+          hotel|khách sạn
+          tourist|khách du lịch
+          journey|chuyến đi
+          destination|điểm đến
+          traffic|giao thông
+          road|con đường
+          bridge|cây cầu
+          platform|sân ga
+
+          #Trung cấp|Thành phố và địa điểm
+          city|thành phố
+          village|ngôi làng
+          street|đường phố
+          market|chợ
+          supermarket|siêu thị
+          restaurant|nhà hàng
+          hospital|bệnh viện
+          bank|ngân hàng
+          post office|bưu điện
+          museum|bảo tàng
+          park|công viên
+          church|nhà thờ
+          temple|ngôi đền; ngôi chùa
+          cinema|rạp chiếu phim
+          school|trường học
+          factory|nhà máy
+          pharmacy|hiệu thuốc; nhà thuốc
+          police station|đồn cảnh sát
+          beach|bãi biển
+          mountain|ngọn núi
+
+          #Trung cấp|Thời tiết và thiên nhiên
+          weather|thời tiết
+          sun|mặt trời
+          moon|mặt trăng
+          star|ngôi sao
+          sky|bầu trời
+          cloud|đám mây
+          rain|cơn mưa
+          snow|tuyết
+          wind|gió
+          storm|cơn bão
+          river|dòng sông
+          lake|cái hồ
+          sea|biển cả
+          forest|khu rừng
+          flower|bông hoa
+          tree|cái cây
+          grass|cỏ
+          island|hòn đảo
+          earth|trái đất
+          season|mùa
+
+          #Trung cấp|Cảm xúc và tính cách
+          happy|vui vẻ
+          sad|buồn bã
+          angry|tức giận
+          afraid|sợ hãi
+          excited|hào hứng
+          tired|mệt mỏi
+          bored|chán nản
+          nervous|lo lắng
+          proud|tự hào
+          lonely|cô đơn
+          kind|tốt bụng
+          honest|trung thực
+          lazy|lười biếng
+          brave|dũng cảm
+          polite|lịch sự
+          shy|nhút nhát
+          clever|thông minh
+          generous|hào phóng
+          patient|kiên nhẫn
+          curious|tò mò
+
+          #Trung cấp|Mua sắm và tiền bạc
+          money|tiền
+          price|giá cả
+          cheap|rẻ
+          expensive|đắt
+          cash|tiền mặt
+          credit card|thẻ tín dụng
+          receipt|biên lai
+          discount|giảm giá
+          sale|đợt khuyến mãi
+          customer|khách hàng
+          shop|cửa hàng
+          wallet|cái ví
+          coin|đồng xu
+          change|tiền thừa; sự thay đổi
+          bargain|món hời
+          budget|ngân sách
+          save|tiết kiệm
+          spend|tiêu tiền
+          pay|trả tiền
+          borrow|mượn
+
+          #Trung cấp|Công nghệ và Internet
+          computer|máy tính
+          laptop|máy tính xách tay
+          screen|màn hình
+          keyboard|bàn phím
+          internet|mạng internet
+          website|trang web
+          email|thư điện tử
+          password|mật khẩu
+          software|phần mềm
+          application|ứng dụng
+          download|tải xuống
+          upload|tải lên
+          battery|pin
+          camera|máy ảnh
+          headphones|tai nghe
+          printer|máy in
+          network|mạng lưới
+          search|tìm kiếm
+          message|tin nhắn
+          video|đoạn phim; video
+
+          #Trung cấp|Thể thao và giải trí
+          football|bóng đá
+          basketball|bóng rổ
+          tennis|quần vợt
+          swimming|bơi lội
+          badminton|cầu lông
+          team|đội
+          player|cầu thủ
+          match|trận đấu
+          winner|người chiến thắng
+          goal|bàn thắng
+          music|âm nhạc
+          song|bài hát
+          movie|bộ phim
+          dance|khiêu vũ; nhảy múa
+          guitar|đàn ghi-ta
+          party|bữa tiệc
+          hobby|sở thích
+          holiday|kỳ nghỉ
+          game|trò chơi
+          photo|bức ảnh
+
+          #Trung cấp|Tính từ thông dụng
+          easy|dễ dàng
+          difficult|khó khăn
+          important|quan trọng
+          beautiful|xinh đẹp
+          ugly|xấu xí
+          dangerous|nguy hiểm
+          safe|an toàn
+          free|miễn phí; rảnh rỗi
+          busy|bận rộn
+          empty|trống rỗng
+          full|đầy
+          heavy|nặng
+          light|nhẹ; ánh sáng
+          fast|nhanh
+          slow|chậm
+          strong|mạnh mẽ
+          weak|yếu đuối
+          dirty|bẩn thỉu
+          quiet|yên tĩnh
+          famous|nổi tiếng
+
+          #Nâng cao|Kinh doanh
+          company|công ty
+          business|việc kinh doanh
+          profit|lợi nhuận
+          loss|khoản lỗ
+          investment|sự đầu tư
+          contract|hợp đồng
+          negotiate|đàm phán
+          deadline|hạn chót
+          revenue|doanh thu
+          strategy|chiến lược
+          competitor|đối thủ cạnh tranh
+          customer service|dịch vụ khách hàng
+          advertise|quảng cáo
+          manufacture|sản xuất
+          export|xuất khẩu
+          import|nhập khẩu
+          shareholder|cổ đông
+          partnership|quan hệ đối tác
+          inflation|lạm phát
+          entrepreneur|doanh nhân khởi nghiệp
+
+          #Nâng cao|Học thuật và nghiên cứu
+          research|nghiên cứu
+          theory|lý thuyết
+          evidence|bằng chứng
+          analyze|phân tích
+          conclusion|kết luận
+          hypothesis|giả thuyết
+          method|phương pháp
+          survey|cuộc khảo sát
+          data|dữ liệu
+          statistics|thống kê
+          discuss|thảo luận
+          argue|tranh luận
+          summarize|tóm tắt
+          compare|so sánh
+          define|định nghĩa
+          describe|mô tả
+          predict|dự đoán
+          improve|cải thiện
+          achieve|đạt được
+          concept|khái niệm
+
+          #Nâng cao|Xã hội và môi trường
+          government|chính phủ
+          society|xã hội
+          law|luật pháp
+          election|cuộc bầu cử
+          citizen|công dân
+          justice|công lý
+          poverty|sự nghèo đói
+          pollution|ô nhiễm
+          climate|khí hậu
+          environment|môi trường
+          recycle|tái chế
+          energy|năng lượng
+          resource|tài nguyên
+          population|dân số
+          education|giáo dục
+          culture|văn hóa
+          tradition|truyền thống
+          community|cộng đồng
+          equality|sự bình đẳng
+          freedom|sự tự do
+
+          #Nâng cao|Tính từ nâng cao
+          efficient|hiệu quả
+          flexible|linh hoạt
+          reliable|đáng tin cậy
+          ambitious|đầy tham vọng
+          creative|sáng tạo
+          essential|thiết yếu
+          obvious|hiển nhiên
+          ordinary|bình thường
+          unique|độc đáo
+          wealthy|giàu có
+          fragile|mong manh; dễ vỡ
+          reluctant|miễn cưỡng
+          sufficient|đủ; đầy đủ
+          accurate|chính xác
+          temporary|tạm thời
+          permanent|vĩnh viễn
+          mature|trưởng thành
+          modest|khiêm tốn
+          stubborn|bướng bỉnh
+          fluent|trôi chảy; lưu loát
+
+          #Nâng cao|Động từ nâng cao
+          accept|chấp nhận
+          adapt|thích nghi
+          admit|thừa nhận
+          avoid|tránh
+          complain|phàn nàn
+          consider|cân nhắc
+          depend|phụ thuộc
+          deserve|xứng đáng
+          encourage|khuyến khích
+          establish|thành lập
+          explain|giải thích
+          ignore|phớt lờ
+          imagine|tưởng tượng
+          maintain|duy trì
+          persuade|thuyết phục
+          recommend|giới thiệu; đề xuất
+          require|yêu cầu
+          suggest|đề nghị; gợi ý
+          support|ủng hộ
+          wonder|tự hỏi
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/values"
+          cat > "app/src/main/res/values/strings.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Từ Vựng</string>
+              <string name="widget_desc">Học từ vựng tiếng Anh ngay trên màn hình chính</string>
+          </resources>
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/xml"
+          cat > "app/src/main/res/xml/widget_vocab_info.xml" <<'AMLICH_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:description="@string/widget_desc"
+              android:initialLayout="@layout/widget_vocab"
+              android:minWidth="250dp"
+              android:minHeight="180dp"
+              android:minResizeWidth="180dp"
+              android:minResizeHeight="140dp"
+              android:resizeMode="horizontal|vertical"
+              android:targetCellWidth="4"
+              android:targetCellHeight="3"
+              android:updatePeriodMillis="0"
+              android:widgetCategory="home_screen" />
+          AMLICH_EOF
+          cat > "build.gradle" <<'AMLICH_EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          AMLICH_EOF
+          cat > debug.keystore.b64 <<'AMLICH_EOF'
+          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
+          AMLICH_EOF
+          base64 -d debug.keystore.b64 > debug.keystore
+          cat > "gradle.properties" <<'AMLICH_EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          AMLICH_EOF
+          cat > "settings.gradle" <<'AMLICH_EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "TuVung"
+          include ':app'
+          AMLICH_EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Build APK
+        working-directory: /home/runner/proj
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TuVung-APK
+          path: /home/runner/proj/app/build/outputs/apk/debug/app-debug.apk
