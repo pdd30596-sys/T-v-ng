@@ -26,8 +26,8 @@ jobs:
                   applicationId "vn.tuvung.app"
                   minSdk 26
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "1.1"
               }
 
               signingConfigs {
@@ -198,6 +198,8 @@ jobs:
                       box.background = Ui.bg(this, Color.WHITE, 10, Color.parseColor("#E5E7EB"))
                       val status = if (n >= Store.GOAL) "✓ xong" else "●".repeat(n) + "○".repeat(Store.GOAL - n)
                       box.addView(Ui.tv(this, w.en, 17f, Color.parseColor("#111827"), true))
+                      val pr = PronData.get(this, w.en)
+                      if (pr != null) box.addView(Ui.tv(this, pr.ipa + "  •  " + pr.boi, 12f, Color.parseColor("#B45309")), lp(2))
                       box.addView(Ui.tv(this, w.vi.replace(";", " /"), 14f, Color.parseColor("#374151")), lp(2))
                       box.addView(
                           Ui.tv(this, status, 12f, if (n >= Store.GOAL) Color.parseColor("#059669") else Color.parseColor("#9CA3AF")),
@@ -334,6 +336,7 @@ jobs:
 
               private lateinit var tvProgress: TextView
               private lateinit var tvWord: TextView
+              private lateinit var tvPron: TextView
               private lateinit var etAns: EditText
               private lateinit var tvResult: TextView
               private lateinit var btnMain: TextView
@@ -359,8 +362,11 @@ jobs:
                   tvWord = Ui.tv(this, "", 30f, Color.parseColor("#1D4ED8"), true)
                   tvWord.gravity = Gravity.CENTER
                   tvWord.setPadding(0, Ui.dp(this, 28), 0, Ui.dp(this, 8))
+                  tvPron = Ui.tv(this, "", 14f, Color.parseColor("#B45309"))
+                  tvPron.gravity = Gravity.CENTER
                   tvWord.setOnClickListener { cur?.let { Speaker.speak(this, it.en) } }
                   root.addView(tvWord, lp())
+                  root.addView(tvPron, lp())
                   root.addView(
                       Ui.tv(this, "Gõ nghĩa tiếng Việt (có dấu hay không dấu đều được)", 12f, Color.parseColor("#6B7280")).also { it.gravity = Gravity.CENTER },
                       lp()
@@ -416,6 +422,7 @@ jobs:
                   if (w == null) {
                       finished = true
                       cur = null
+                      tvPron.text = ""
                       tvWord.text = "🎉 Hoàn thành bài!"
                       tvWord.textSize = 24f
                       etAns.visibility = View.GONE
@@ -427,6 +434,7 @@ jobs:
                   cur = w
                   lastIdx = w.idx
                   tvWord.text = w.en
+                  tvPron.text = PronData.text(this, w.en)
                   updateProgress()
                   Speaker.speak(this, w.en)
               }
@@ -467,6 +475,39 @@ jobs:
                   if (answered) return
                   tvResult.setTextColor(Color.parseColor("#6B7280"))
                   tvResult.text = "Gợi ý: " + w.primary.split(" ").joinToString(" ") { it.take(1) + "…" }
+              }
+          }
+          AMLICH_EOF
+          mkdir -p "app/src/main/java/vn/tuvung/app"
+          cat > "app/src/main/java/vn/tuvung/app/Pron.kt" <<'AMLICH_EOF'
+          package vn.tuvung.app
+
+          import android.content.Context
+
+          class Pron(val ipa: String, val boi: String)
+
+          object PronData {
+              private var map: Map<String, Pron>? = null
+
+              private fun load(ctx: Context): Map<String, Pron> {
+                  map?.let { return it }
+                  val m = HashMap<String, Pron>()
+                  ctx.applicationContext.resources.openRawResource(R.raw.pron)
+                      .bufferedReader(Charsets.UTF_8).useLines { lines ->
+                          for (raw in lines) {
+                              val p = raw.trim().split("|", limit = 3)
+                              if (p.size == 3) m[p[0]] = Pron(p[1], p[2])
+                          }
+                      }
+                  map = m
+                  return m
+              }
+
+              fun get(ctx: Context, en: String): Pron? = load(ctx)[en]
+
+              fun text(ctx: Context, en: String): String {
+                  val p = get(ctx, en) ?: return ""
+                  return p.ipa + "\nĐọc bồi: " + p.boi
               }
           }
           AMLICH_EOF
@@ -629,28 +670,64 @@ jobs:
           package vn.tuvung.app
 
           import android.content.Context
+          import android.os.Handler
+          import android.os.Looper
           import android.speech.tts.TextToSpeech
+          import android.speech.tts.UtteranceProgressListener
           import java.util.Locale
 
           object Speaker {
               private var tts: TextToSpeech? = null
               private var ready = false
               private var pending: String? = null
+              private var onDone: (() -> Unit)? = null
+              private val main = Handler(Looper.getMainLooper())
+
+              private fun finishCb() {
+                  val cb = onDone
+                  onDone = null
+                  if (cb != null) cb()
+              }
+
+              private fun doSpeak(text: String) {
+                  tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
+              }
 
               fun speak(ctx: Context, text: String) {
+                  speakThen(ctx, text, null)
+              }
+
+              /** Đọc text, gọi done khi đọc xong (hoặc sau tối đa 6 giây). */
+              fun speakThen(ctx: Context, text: String, done: (() -> Unit)?) {
+                  finishCb()
+                  onDone = done
+                  if (done != null) main.postDelayed({ finishCb() }, 6000)
                   val t = tts
                   if (t == null) {
                       pending = text
                       tts = TextToSpeech(ctx.applicationContext) { status ->
                           if (status == TextToSpeech.SUCCESS) {
                               tts?.language = Locale.US
+                              tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                                  override fun onStart(utteranceId: String?) {}
+                                  override fun onDone(utteranceId: String?) {
+                                      main.post { finishCb() }
+                                  }
+
+                                  @Deprecated("Deprecated in Java")
+                                  override fun onError(utteranceId: String?) {
+                                      main.post { finishCb() }
+                                  }
+                              })
                               ready = true
-                              pending?.let { tts?.speak(it, TextToSpeech.QUEUE_FLUSH, null, "u") }
+                              pending?.let { doSpeak(it) }
                               pending = null
+                          } else {
+                              main.post { finishCb() }
                           }
                       }
                   } else if (ready) {
-                      t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
+                      doSpeak(text)
                   } else {
                       pending = text
                   }
@@ -894,6 +971,18 @@ jobs:
                           Quiz.skip(ctx, intent.getIntExtra("serial", -1))
                           updateAll(ctx)
                       }
+                      ACTION_SPEAK -> {
+                          val serial = intent.getIntExtra("serial", -1)
+                          val q = Quiz.current(ctx)
+                          if (q != null && q.serial == serial) {
+                              ctx.getSharedPreferences("vocab_quiz", Context.MODE_PRIVATE)
+                                  .edit().putInt("pron_serial", serial).apply()
+                              updateAll(ctx)
+                              val en = Vocab.all(ctx)[q.lesson].words[q.idx].en
+                              val pr = goAsync()
+                              Speaker.speakThen(ctx, en) { pr.finish() }
+                          }
+                      }
                       else -> super.onReceive(ctx, intent)
                   }
               }
@@ -901,6 +990,7 @@ jobs:
               companion object {
                   const val ACTION_ANSWER = "vn.tuvung.app.ANSWER"
                   const val ACTION_SKIP = "vn.tuvung.app.SKIP"
+                  const val ACTION_SPEAK = "vn.tuvung.app.SPEAK"
 
                   fun updateAll(ctx: Context) {
                       val mgr = AppWidgetManager.getInstance(ctx)
@@ -941,6 +1031,8 @@ jobs:
                       if (q == null) {
                           rv.setTextViewText(R.id.tv_lesson, "Từ vựng tiếng Anh")
                           rv.setTextViewText(R.id.tv_skip, "")
+                          rv.setTextViewText(R.id.tv_speak, "")
+                          rv.setViewVisibility(R.id.tv_pron, View.GONE)
                           rv.setTextViewText(R.id.tv_feedback, "")
                           rv.setTextViewText(R.id.tv_word, "🎉 Bạn đã hoàn thành tất cả các bài!")
                           rv.setTextViewTextSize(R.id.tv_word, TypedValue.COMPLEX_UNIT_SP, (wordSp * 0.6f).coerceAtLeast(14f))
@@ -956,6 +1048,18 @@ jobs:
                       rv.setViewVisibility(R.id.row2, View.VISIBLE)
                       rv.setTextViewText(R.id.tv_lesson, "Bài ${l.id + 1}: ${l.title}")
                       rv.setTextViewText(R.id.tv_skip, "Bỏ qua ⏭")
+                      rv.setTextViewText(R.id.tv_speak, "🔊 Nghe")
+                      rv.setOnClickPendingIntent(R.id.tv_speak, broadcast(ctx, ACTION_SPEAK, id, 6, q.serial, 0))
+                      val showPron = ctx.getSharedPreferences("vocab_quiz", Context.MODE_PRIVATE)
+                          .getInt("pron_serial", -1) == q.serial
+                      val pt = if (showPron) PronData.text(ctx, word.en) else ""
+                      if (pt.isNotEmpty()) {
+                          rv.setTextViewText(R.id.tv_pron, pt)
+                          rv.setTextViewTextSize(R.id.tv_pron, TypedValue.COMPLEX_UNIT_SP, if (h < 170) 11f else 13f)
+                          rv.setViewVisibility(R.id.tv_pron, View.VISIBLE)
+                      } else {
+                          rv.setViewVisibility(R.id.tv_pron, View.GONE)
+                      }
                       rv.setOnClickPendingIntent(R.id.tv_skip, broadcast(ctx, ACTION_SKIP, id, 5, q.serial, 0))
 
                       val fb = Quiz.feedback(ctx)
@@ -1057,6 +1161,17 @@ jobs:
                       android:textStyle="bold" />
 
                   <TextView
+                      android:id="@+id/tv_speak"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:paddingLeft="8dp"
+                      android:paddingRight="8dp"
+                      android:text="🔊 Nghe"
+                      android:textColor="#FDE68A"
+                      android:textSize="13sp"
+                      android:textStyle="bold" />
+
+                  <TextView
                       android:id="@+id/tv_skip"
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
@@ -1085,6 +1200,15 @@ jobs:
                   android:textColor="#FFFFFF"
                   android:textSize="28sp"
                   android:textStyle="bold" />
+
+              <TextView
+                  android:id="@+id/tv_pron"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:gravity="center"
+                  android:textColor="#FDE68A"
+                  android:textSize="12sp"
+                  android:visibility="gone" />
 
               <TextView
                   android:id="@+id/tv_info"
@@ -1165,6 +1289,625 @@ jobs:
                       android:textSize="14sp" />
               </LinearLayout>
           </LinearLayout>
+          AMLICH_EOF
+          mkdir -p "app/src/main/res/raw"
+          cat > "app/src/main/res/raw/pron.txt" <<'AMLICH_EOF'
+          one|/wʌn/|oăn
+          two|/tuː/|tu
+          three|/θriː/|thri (đặt lưỡi giữa răng khi đọc "th")
+          four|/fɔːr/|pho
+          five|/faɪv/|phai-v
+          six|/sɪks/|síc-s
+          seven|/ˈsevən/|sé-vừn
+          eight|/eɪt/|ết
+          nine|/naɪn/|nai-n
+          ten|/ten/|ten
+          hundred|/ˈhʌndrəd/|hăn-đrợt
+          thousand|/ˈθaʊzənd/|thao-zừn-d
+          first|/fɜːrst/|phớt-s
+          today|/təˈdeɪ/|tờ-đây
+          tomorrow|/təˈmɑːroʊ/|tờ-ma-râu
+          yesterday|/ˈjestərdeɪ/|dét-xờ-đây
+          morning|/ˈmɔːrnɪŋ/|mo-ning
+          night|/naɪt/|nai-t
+          week|/wiːk/|uých
+          month|/mʌnθ/|măn-th
+          family|/ˈfæməli/|phem-mờ-li
+          father|/ˈfɑːðər/|pha-đờ
+          mother|/ˈmʌðər/|mă-đờ
+          brother|/ˈbrʌðər/|bră-đờ
+          sister|/ˈsɪstər/|xít-xờ
+          son|/sʌn/|săn
+          daughter|/ˈdɔːtər/|đo-tờ
+          grandfather|/ˈɡrænfɑːðər/|grần-pha-đờ
+          grandmother|/ˈɡrænmʌðər/|grần-mă-đờ
+          uncle|/ˈʌŋkəl/|ăng-cồ
+          aunt|/ænt/|ent
+          cousin|/ˈkʌzən/|cá-zần
+          husband|/ˈhʌzbənd/|hăz-bần-d
+          wife|/waɪf/|oai-f
+          baby|/ˈbeɪbi/|bây-bi
+          child|/tʃaɪld/|chai-ld
+          man|/mæn/|men
+          woman|/ˈwʊmən/|u-mần
+          friend|/frend/|phren-d
+          neighbor|/ˈneɪbər/|nây-bờ
+          bread|/bred/|bret
+          rice|/raɪs/|rai-s
+          noodles|/ˈnuːdəlz/|nu-đồ-z
+          meat|/miːt/|mít
+          chicken|/ˈtʃɪkɪn/|chí-kần
+          beef|/biːf/|bíp-f
+          pork|/pɔːrk/|po-k
+          fish|/fɪʃ/|phí-sờ
+          egg|/eɡ/|eg
+          cheese|/tʃiːz/|chiz
+          butter|/ˈbʌtər/|bá-tờ
+          soup|/suːp/|sup
+          salad|/ˈsæləd/|xe-lợt
+          sandwich|/ˈsænwɪtʃ/|xen-uých
+          pizza|/ˈpiːtsə/|pít-xờ
+          cake|/keɪk/|kêch
+          sugar|/ˈʃʊɡər/|su-gờ
+          salt|/sɔːlt/|xon-t
+          vegetable|/ˈvedʒtəbəl/|vết-tờ-bồ
+          breakfast|/ˈbrekfəst/|brếch-phợt-s
+          water|/ˈwɔːtər/|uo-tờ
+          milk|/mɪlk/|mi-ơk
+          coffee|/ˈkɔːfi/|cóf-phi
+          tea|/tiː/|ti
+          juice|/dʒuːs/|giu-s
+          beer|/bɪr/|biơ
+          wine|/waɪn/|oai-n
+          apple|/ˈæpəl/|ép-pồ
+          banana|/bəˈnænə/|bờ-ne-nờ
+          orange|/ˈɔːrɪndʒ/|o-rình-g
+          grape|/ɡreɪp/|grêp
+          lemon|/ˈlemən/|lé-mần
+          mango|/ˈmæŋɡoʊ/|meng-gâu
+          strawberry|/ˈstrɔːberi/|x-tro-be-ri
+          watermelon|/ˈwɔːtərmelən/|uo-tờ-me-lần
+          pineapple|/ˈpaɪnæpəl/|pai-ne-pồ
+          coconut|/ˈkoʊkənʌt/|câu-cờ-nắt
+          peach|/piːtʃ/|pích
+          pear|/per/|pe
+          ice|/aɪs/|ai-s
+          dog|/dɔːɡ/|đoóg
+          cat|/kæt/|két
+          bird|/bɜːrd/|bớt-d
+          horse|/hɔːrs/|ho-s
+          cow|/kaʊ/|cao
+          pig|/pɪɡ/|pig
+          sheep|/ʃiːp/|síp
+          duck|/dʌk/|đắc
+          rabbit|/ˈræbɪt/|re-bịt
+          mouse|/maʊs/|mao-s
+          monkey|/ˈmʌŋki/|măng-ki
+          elephant|/ˈelɪfənt/|e-lì-phần-t
+          tiger|/ˈtaɪɡər/|tai-gờ
+          lion|/ˈlaɪən/|lai-ần
+          bear|/ber/|be
+          snake|/sneɪk/|x-nêch
+          frog|/frɔːɡ/|phroóg
+          butterfly|/ˈbʌtərflaɪ/|bá-tờ-phlai
+          turtle|/ˈtɜːrtəl/|tớt-tồ
+          spider|/ˈspaɪdər/|x-pai-đờ
+          red|/red/|ret
+          blue|/bluː/|blu
+          green|/ɡriːn/|grin
+          yellow|/ˈjeloʊ/|dê-lâu
+          black|/blæk/|blếch
+          white|/waɪt/|oai-t
+          pink|/pɪŋk/|pinh-k
+          purple|/ˈpɜːrpəl/|pớ-pồ
+          brown|/braʊn/|brao-n
+          gray|/ɡreɪ/|grây
+          big|/bɪɡ/|big
+          small|/smɔːl/|x-mo-ơ
+          long|/lɔːŋ/|loong
+          short|/ʃɔːrt/|sot
+          hot|/hɑːt/|hót
+          cold|/koʊld/|câu-ld
+          new|/nuː/|niu
+          old|/oʊld/|âu-ld
+          good|/ɡʊd/|gút
+          bad|/bæd/|bét
+          be|/biː/|bi
+          have|/hæv/|hép-v
+          go|/ɡoʊ/|gâu
+          come|/kʌm/|căm
+          eat|/iːt/|it
+          drink|/drɪŋk/|đrinh-k
+          sleep|/sliːp/|x-lip
+          walk|/wɔːk/|uóc
+          run|/rʌn/|răn
+          sit|/sɪt/|xịt
+          stand|/stænd/|x-ten-d
+          see|/siː/|xi
+          hear|/hɪr/|hia
+          speak|/spiːk/|x-pích
+          read|/riːd/|rit
+          write|/raɪt/|rai-t
+          listen|/ˈlɪsən/|lít-xần
+          watch|/wɑːtʃ/|uót-ch
+          open|/ˈoʊpən/|âu-pần
+          close|/kloʊz/|clâu-z
+          make|/meɪk/|mêch
+          do|/duː/|đu
+          take|/teɪk/|têch
+          give|/ɡɪv/|gív
+          buy|/baɪ/|bai
+          sell|/sel/|xeo
+          cook|/kʊk/|cúc
+          wash|/wɑːʃ/|uó-sờ
+          clean|/kliːn/|clin
+          help|/help/|heo-p
+          love|/lʌv/|lăv
+          like|/laɪk/|lai-k
+          want|/wɑːnt/|uan-t
+          need|/niːd/|nít
+          know|/noʊ/|nâu
+          think|/θɪŋk/|thinh-k
+          learn|/lɜːrn/|lớn
+          teach|/tiːtʃ/|tích
+          work|/wɜːrk/|uớc
+          play|/pleɪ/|plây
+          Hello!|/həˈloʊ/|hờ-lâu!
+          Good morning!|/ɡʊd ˈmɔːrnɪŋ/|gút mo-ning!
+          Good afternoon!|/ɡʊd ˌæftərˈnuːn/|gút ép-tờ-nun!
+          Good evening!|/ɡʊd ˈiːvnɪŋ/|gút ív-ning!
+          Good night!|/ɡʊd naɪt/|gút nai-t!
+          How are you?|/haʊ ɑːr juː/|hao a diu?
+          I'm fine, thank you.|/aɪm faɪn θæŋk juː/|ai-m phai-n, thenh-k diu.
+          And you?|/ænd juː/|en-d diu?
+          Nice to meet you.|/naɪs tə miːt juː/|nai-s tờ mít diu.
+          See you later.|/siː juː ˈleɪtər/|xi diu lây-tờ.
+          Goodbye!|/ɡʊdˈbaɪ/|gút-bai!
+          Take care!|/teɪk ker/|têch ke!
+          What's your name?|/wɑːts jɔːr neɪm/|uót-s do nêm?
+          My name is Lan.|/maɪ neɪm ɪz læn/|mai nêm iz Lan.
+          Where are you from?|/wer ɑːr juː frʌm/|ue a diu phrăm?
+          I'm from Vietnam.|/aɪm frʌm ˌviːetˈnɑːm/|ai-m phrăm Viêt-nam.
+          How old are you?|/haʊ oʊld ɑːr juː/|hao âu-ld a diu?
+          I am twenty years old.|/aɪ æm ˈtwenti jɪrz oʊld/|ai em tuen-ti diaz âu-ld.
+          What do you do?|/wɑːt duː juː duː/|uót đu diu đu?
+          I'm a student.|/aɪm ə ˈstuːdənt/|ai-m ờ x-tiu-đần-t.
+          Do you speak English?|/duː juː spiːk ˈɪŋɡlɪʃ/|đu diu x-pích inh-glích?
+          I speak a little English.|/aɪ spiːk ə ˈlɪtəl ˈɪŋɡlɪʃ/|ai x-pích ờ lít-tồ inh-glích.
+          Where do you live?|/wer duː juː lɪv/|ue đu diu líp-v?
+          I live in Hanoi.|/aɪ lɪv ɪn hæˈnɔɪ/|ai líp-v in Ha-noi.
+          Thank you very much.|/θæŋk juː ˈveri mʌtʃ/|thenh-k diu ve-ri mắt-ch.
+          You're welcome.|/jɔːr ˈwelkəm/|do uel-cầm.
+          Please.|/pliːz/|pli-z.
+          Excuse me.|/ɪkˈskjuːz miː/|ịc-x-kiu-z mi.
+          I'm sorry.|/aɪm ˈsɑːri/|ai-m xó-ri.
+          That's okay.|/ðæts ˌoʊˈkeɪ/|đét-s âu-kê.
+          No problem.|/noʊ ˈprɑːbləm/|nâu prô-blần.
+          Can you help me?|/kæn juː help miː/|ken diu heo-p mi?
+          Of course.|/əv kɔːrs/|ờv co-s.
+          Could you repeat that?|/kʊd juː rɪˈpiːt ðæt/|cút diu ri-pít đét?
+          I don't understand.|/aɪ doʊnt ˌʌndərˈstænd/|ai đâu-nt ăn-đờ-x-ten-d.
+          Please speak slowly.|/pliːz spiːk ˈsloʊli/|pli-z x-pích x-lâu-li.
+          Where is the bathroom?|/wer ɪz ðə ˈbæθruːm/|ue iz đờ bẹth-rum?
+          How do I get to the station?|/haʊ duː aɪ ɡet tə ðə ˈsteɪʃən/|hao đu ai get tờ đờ x-tây-sần?
+          Turn left.|/tɜːrn left/|tớn lép-ft.
+          Turn right.|/tɜːrn raɪt/|tớn rai-t.
+          Go straight ahead.|/ɡoʊ streɪt əˈhed/|gâu x-trây-t ờ-hét.
+          It's near here.|/ɪts nɪr hɪr/|ịt-s nia hia.
+          It's far from here.|/ɪts fɑːr frʌm hɪr/|ịt-s pha phrăm hia.
+          Is it far?|/ɪz ɪt fɑːr/|iz ịt pha?
+          How long does it take?|/haʊ lɔːŋ dʌz ɪt teɪk/|hao loong đắz ịt têch?
+          Can you show me on the map?|/kæn juː ʃoʊ miː ɑːn ðə mæp/|ken diu sâu mi on đờ mép?
+          I'm lost.|/aɪm lɔːst/|ai-m lóst.
+          Where is the bus stop?|/wer ɪz ðə bʌs stɑːp/|ue iz đờ bắt-s x-tóp?
+          A table for two, please.|/ə ˈteɪbəl fɔːr tuː pliːz/|ờ tây-bồ pho tu, pli-z.
+          Can I see the menu?|/kæn aɪ siː ðə ˈmenjuː/|ken ai xi đờ men-diu?
+          What do you recommend?|/wɑːt duː juː ˌrekəˈmend/|uót đu diu re-cờ-men-d?
+          I'd like some water.|/aɪd laɪk sʌm ˈwɔːtər/|ai-d lai-k săm uo-tờ.
+          I'll have the chicken.|/aɪl hæv ðə ˈtʃɪkɪn/|ai-o hép-v đờ chí-kần.
+          It's delicious.|/ɪts dɪˈlɪʃəs/|ịt-s đi-lí-sợt.
+          Can I have the bill?|/kæn aɪ hæv ðə bɪl/|ken ai hép-v đờ bìu?
+          Is service included?|/ɪz ˈsɜːrvɪs ɪnˈkluːdɪd/|iz xớ-vịt-s in-clu-địt?
+          I'm allergic to peanuts.|/aɪm əˈlɜːrdʒɪk tə ˈpiːnʌts/|ai-m ờ-lớ-gịc tờ pi-nắt-s.
+          No spicy food, please.|/noʊ ˈspaɪsi fuːd pliːz/|nâu x-pai-xi phu-d, pli-z.
+          Another drink, please.|/əˈnʌðər drɪŋk pliːz/|ờ-nă-đờ đrinh-k, pli-z.
+          Can I pay by card?|/kæn aɪ peɪ baɪ kɑːrd/|ken ai pây bai ca-d?
+          How much is this?|/haʊ mʌtʃ ɪz ðɪs/|hao mắt-ch iz đít-s?
+          It's too expensive.|/ɪts tuː ɪkˈspensɪv/|ịt-s tu ịc-x-pen-xịv.
+          Do you have a smaller size?|/duː juː hæv ə ˈsmɔːlər saɪz/|đu diu hép-v ờ x-mo-lờ xai-z?
+          Can I try it on?|/kæn aɪ traɪ ɪt ɑːn/|ken ai trai ịt on?
+          I'm just looking.|/aɪm dʒʌst ˈlʊkɪŋ/|ai-m giắt-s-t lúc-king.
+          I'll take it.|/aɪl teɪk ɪt/|ai-o têch ịt.
+          Do you accept credit cards?|/duː juː əkˈsept ˈkredɪt kɑːrdz/|đu diu ợc-xép-t cre-địt ca-d-z?
+          Can I get a discount?|/kæn aɪ ɡet ə ˈdɪskaʊnt/|ken ai get ờ đít-x-caont?
+          Where is the fitting room?|/wer ɪz ðə ˈfɪtɪŋ ruːm/|ue iz đờ phí-ting rum?
+          Do you have this in blue?|/duː juː hæv ðɪs ɪn bluː/|đu diu hép-v đít-s in blu?
+          Can I have a bag?|/kæn aɪ hæv ə bæɡ/|ken ai hép-v ờ bég?
+          What time do you close?|/wɑːt taɪm duː juː kloʊz/|uót tai-m đu diu clâu-z?
+          Hello, who is this?|/həˈloʊ huː ɪz ðɪs/|hờ-lâu, hu iz đít-s?
+          Can I speak to Mr. Nam?|/kæn aɪ spiːk tə ˈmɪstər nɑːm/|ken ai x-pích tu mít-x-tờ Nam?
+          Please hold on.|/pliːz hoʊld ɑːn/|pli-z hâu-ld on.
+          He is not here right now.|/hiː ɪz nɑːt hɪr raɪt naʊ/|hi iz nót hia rai-t nao.
+          Can I leave a message?|/kæn aɪ liːv ə ˈmesɪdʒ/|ken ai lív ờ mé-xịt-g?
+          I'll call you back.|/aɪl kɔːl juː bæk/|ai-o co-o diu béc.
+          Let's meet tomorrow.|/lets miːt təˈmɑːroʊ/|let-s mít tờ-ma-râu.
+          What time is good for you?|/wɑːt taɪm ɪz ɡʊd fɔːr juː/|uót tai-m iz gút pho diu?
+          I'm running late.|/aɪm ˈrʌnɪŋ leɪt/|ai-m ră-ning lết.
+          I'm on my way.|/aɪm ɑːn maɪ weɪ/|ai-m on mai uây.
+          Sorry, I can't come.|/ˈsɑːri aɪ kænt kʌm/|xó-ri, ai ken-t căm.
+          See you at five o'clock.|/siː juː æt faɪv əˈklɑːk/|xi diu et phai-v ờ-clóc.
+          I have a reservation.|/aɪ hæv ə ˌrezərˈveɪʃən/|ai hép-v ờ re-zờ-vây-sần.
+          Do you have any rooms available?|/duː juː hæv ˈeni ruːmz əˈveɪləbəl/|đu diu hép-v e-ni rum-z ờ-vây-lờ-bồ?
+          What time is check-out?|/wɑːt taɪm ɪz ˈtʃek aʊt/|uót tai-m iz chéc-aot?
+          Is breakfast included?|/ɪz ˈbrekfəst ɪnˈkluːdɪd/|iz brếch-phợt in-clu-địt?
+          Can I have the Wi-Fi password?|/kæn aɪ hæv ðə ˈwaɪ faɪ ˈpæswɜːrd/|ken ai hép-v đờ oai-phai pét-s-uớt?
+          I need a taxi.|/aɪ niːd ə ˈtæksi/|ai nít ờ téc-xi.
+          I lost my passport.|/aɪ lɔːst maɪ ˈpæspɔːrt/|ai lóst mai pét-s-po-t.
+          Please call the police.|/pliːz kɔːl ðə pəˈliːs/|pli-z co-o đờ pờ-lít-s.
+          I need a doctor.|/aɪ niːd ə ˈdɑːktər/|ai nít ờ đóc-tờ.
+          Where is the nearest hospital?|/wer ɪz ðə ˈnɪrəst ˈhɑːspɪtəl/|ue iz đờ nia-rợt-s hóc-s-pi-tồ?
+          I feel sick.|/aɪ fiːl sɪk/|ai phi-o xíc.
+          Help!|/help/|heo-p!
+          teacher|/ˈtiːtʃər/|ti-chờ
+          student|/ˈstuːdənt/|x-tiu-đần-t
+          classroom|/ˈklæsruːm/|clét-s-rum
+          homework|/ˈhoʊmwɜːrk/|hâu-m-uớc
+          exam|/ɪɡˈzæm/|ịg-zem
+          lesson|/ˈlesən/|lé-xần
+          subject|/ˈsʌbdʒekt/|xắp-gịc-t
+          grade|/ɡreɪd/|grêt
+          library|/ˈlaɪbreri/|lai-bre-ri
+          notebook|/ˈnoʊtbʊk/|nâu-t-búc
+          pencil|/ˈpensəl/|pen-xồ
+          dictionary|/ˈdɪkʃəneri/|đíc-sần-ne-ri
+          university|/ˌjuːnɪˈvɜːrsəti/|diu-ni-vớ-xờ-ti
+          degree|/dɪˈɡriː/|đi-gri
+          scholarship|/ˈskɑːlərʃɪp/|x-cô-lờ-síp
+          lecture|/ˈlektʃər/|léc-chờ
+          question|/ˈkwestʃən/|cuét-chần
+          answer|/ˈænsər/|en-xờ
+          mistake|/mɪˈsteɪk/|mịt-x-têch
+          knowledge|/ˈnɑːlɪdʒ/|nó-lịt-g
+          job|/dʒɑːb/|giốp
+          office|/ˈɔːfɪs/|óp-phịt-s
+          manager|/ˈmænɪdʒər/|men-ni-giờ
+          engineer|/ˌendʒɪˈnɪr/|en-gi-nia
+          nurse|/nɜːrs/|nớt-s
+          farmer|/ˈfɑːrmər/|pha-mờ
+          driver|/ˈdraɪvər/|đrai-vờ
+          chef|/ʃef/|sép-f
+          lawyer|/ˈlɔːjər/|lo-dờ
+          salary|/ˈsæləri/|xe-lờ-ri
+          boss|/bɔːs/|bót-s
+          colleague|/ˈkɑːliːɡ/|có-lig
+          meeting|/ˈmiːtɪŋ/|mi-ting
+          interview|/ˈɪntərvjuː/|in-tờ-viu
+          career|/kəˈrɪr/|cờ-ria
+          experience|/ɪkˈspɪriəns/|ịc-x-pia-ri-ần-s
+          skill|/skɪl/|x-kiu
+          retire|/rɪˈtaɪər/|ri-tai-ờ
+          hire|/ˈhaɪər/|hai-ờ
+          resign|/rɪˈzaɪn/|ri-zai-n
+          airport|/ˈerpɔːrt/|e-po-t
+          ticket|/ˈtɪkɪt/|tí-kịt
+          passport|/ˈpæspɔːrt/|pét-s-po-t
+          luggage|/ˈlʌɡɪdʒ/|lă-gịt-g
+          flight|/flaɪt/|phlai-t
+          train|/treɪn/|trên
+          bus|/bʌs/|bắt-s
+          taxi|/ˈtæksi/|téc-xi
+          bicycle|/ˈbaɪsɪkəl/|bai-xì-cồ
+          motorbike|/ˈmoʊtərbaɪk/|mâu-tờ-bai-k
+          ship|/ʃɪp/|síp
+          map|/mæp/|mép
+          hotel|/hoʊˈtel/|hâu-teo
+          tourist|/ˈtʊrɪst/|tu-rịt-s-t
+          journey|/ˈdʒɜːrni/|giớ-ni
+          destination|/ˌdestɪˈneɪʃən/|đét-x-ti-nây-sần
+          traffic|/ˈtræfɪk/|tre-phíc
+          road|/roʊd/|râu-d
+          bridge|/brɪdʒ/|brịt-g
+          platform|/ˈplætfɔːrm/|plét-pho-m
+          city|/ˈsɪti/|xí-ti
+          village|/ˈvɪlɪdʒ/|ví-lịt-g
+          street|/striːt/|x-trít
+          market|/ˈmɑːrkɪt/|ma-kịt
+          supermarket|/ˈsuːpərmɑːrkɪt/|xu-pờ-ma-kịt
+          restaurant|/ˈrestərɑːnt/|res-tờ-ron-t
+          hospital|/ˈhɑːspɪtəl/|hóc-s-pi-tồ
+          bank|/bæŋk/|benh-k
+          post office|/ˈpoʊst ˌɔːfɪs/|pâu-s-t óp-phịt-s
+          museum|/mjuˈziːəm/|miu-zi-ầm
+          park|/pɑːrk/|pa-k
+          church|/tʃɜːrtʃ/|chớt-ch
+          temple|/ˈtempəl/|tem-pồ
+          cinema|/ˈsɪnəmə/|xí-nờ-mờ
+          school|/skuːl/|x-cu-ồ
+          factory|/ˈfæktəri/|phéc-tờ-ri
+          pharmacy|/ˈfɑːrməsi/|pha-mờ-xi
+          police station|/pəˈliːs ˌsteɪʃən/|pờ-lít-s x-tây-sần
+          beach|/biːtʃ/|bích
+          mountain|/ˈmaʊntən/|mao-n-tần
+          weather|/ˈweðər/|ue-đờ
+          sun|/sʌn/|xăn
+          moon|/muːn/|mun
+          star|/stɑːr/|x-ta
+          sky|/skaɪ/|x-cai
+          cloud|/klaʊd/|clao-d
+          rain|/reɪn/|rên
+          snow|/snoʊ/|x-nâu
+          wind|/wɪnd/|uin-d
+          storm|/stɔːrm/|x-to-m
+          river|/ˈrɪvər/|rí-vờ
+          lake|/leɪk/|lêch
+          sea|/siː/|xi
+          forest|/ˈfɔːrɪst/|pho-rịt-s-t
+          flower|/ˈflaʊər/|phlao-ờ
+          tree|/triː/|tri
+          grass|/ɡræs/|grét-s
+          island|/ˈaɪlənd/|ai-lần-d
+          earth|/ɜːrθ/|ớ-th
+          season|/ˈsiːzən/|xi-zần
+          happy|/ˈhæpi/|hép-pi
+          sad|/sæd/|xét
+          angry|/ˈæŋɡri/|eng-gri
+          afraid|/əˈfreɪd/|ờ-phrêt
+          excited|/ɪkˈsaɪtɪd/|ịc-xai-tịt
+          tired|/ˈtaɪərd/|tai-ợt
+          bored|/bɔːrd/|bo-d
+          nervous|/ˈnɜːrvəs/|nớ-vợt-s
+          proud|/praʊd/|prao-d
+          lonely|/ˈloʊnli/|lâu-n-li
+          kind|/kaɪnd/|cai-n-d
+          honest|/ˈɑːnɪst/|ó-nịt-s-t
+          lazy|/ˈleɪzi/|lây-zi
+          brave|/breɪv/|brêv
+          polite|/pəˈlaɪt/|pờ-lai-t
+          shy|/ʃaɪ/|sai
+          clever|/ˈklevər/|clé-vờ
+          generous|/ˈdʒenərəs/|gen-nờ-rợt-s
+          patient|/ˈpeɪʃənt/|pây-sần-t
+          curious|/ˈkjʊriəs/|kiu-ri-ợt-s
+          money|/ˈmʌni/|măn-ni
+          price|/praɪs/|prai-s
+          cheap|/tʃiːp/|chíp
+          expensive|/ɪkˈspensɪv/|ịc-x-pen-xịv
+          cash|/kæʃ/|két-sờ
+          credit card|/ˈkredɪt kɑːrd/|cre-địt ca-d
+          receipt|/rɪˈsiːt/|ri-xít
+          discount|/ˈdɪskaʊnt/|đít-x-caon-t
+          sale|/seɪl/|xê-o
+          customer|/ˈkʌstəmər/|cắt-x-tờ-mờ
+          shop|/ʃɑːp/|sóp
+          wallet|/ˈwɑːlɪt/|uó-lịt
+          coin|/kɔɪn/|coi-n
+          change|/tʃeɪndʒ/|chên-g
+          bargain|/ˈbɑːrɡɪn/|ba-gần
+          budget|/ˈbʌdʒɪt/|bắt-gịt
+          save|/seɪv/|xêv
+          spend|/spend/|x-pen-d
+          pay|/peɪ/|pây
+          borrow|/ˈbɑːroʊ/|bo-râu
+          computer|/kəmˈpjuːtər/|cầm-piu-tờ
+          laptop|/ˈlæptɑːp/|lép-tóp
+          screen|/skriːn/|x-crin
+          keyboard|/ˈkiːbɔːrd/|ki-bo-d
+          internet|/ˈɪntərnet/|in-tờ-net
+          website|/ˈwebsaɪt/|ueb-xai-t
+          email|/ˈiːmeɪl/|i-mê-o
+          password|/ˈpæswɜːrd/|pét-s-uớt
+          software|/ˈsɔːftwer/|xóf-t-ue
+          application|/ˌæplɪˈkeɪʃən/|ép-pli-kêy-sần
+          download|/ˈdaʊnloʊd/|đao-n-lâu-d
+          upload|/ˈʌploʊd/|ắp-lâu-d
+          battery|/ˈbætəri/|bét-tờ-ri
+          camera|/ˈkæmərə/|ké-mờ-rờ
+          headphones|/ˈhedfoʊnz/|hét-phâu-n-z
+          printer|/ˈprɪntər/|prin-tờ
+          network|/ˈnetwɜːrk/|net-uớc
+          search|/sɜːrtʃ/|xớt-ch
+          message|/ˈmesɪdʒ/|mé-xịt-g
+          video|/ˈvɪdioʊ/|ví-đi-âu
+          football|/ˈfʊtbɔːl/|phút-bo-ồ
+          basketball|/ˈbæskɪtbɔːl/|bét-x-kịt-bo-ồ
+          tennis|/ˈtenɪs/|te-nịt-s
+          swimming|/ˈswɪmɪŋ/|x-uí-ming
+          badminton|/ˈbædmɪntən/|bét-min-tần
+          team|/tiːm/|tim
+          player|/ˈpleɪər/|plây-ờ
+          match|/mætʃ/|mét-ch
+          winner|/ˈwɪnər/|uí-nờ
+          goal|/ɡoʊl/|gâu-ồ
+          music|/ˈmjuːzɪk/|miu-zịc
+          song|/sɔːŋ/|xoong
+          movie|/ˈmuːvi/|mu-vi
+          dance|/dæns/|đen-s
+          guitar|/ɡɪˈtɑːr/|gi-ta
+          party|/ˈpɑːrti/|pa-ti
+          hobby|/ˈhɑːbi/|hó-bi
+          holiday|/ˈhɑːlɪdeɪ/|hó-li-đây
+          game|/ɡeɪm/|gêm
+          photo|/ˈfoʊtoʊ/|phâu-tâu
+          easy|/ˈiːzi/|i-zi
+          difficult|/ˈdɪfɪkəlt/|đí-phì-cồ-t
+          important|/ɪmˈpɔːrtənt/|im-po-tần-t
+          beautiful|/ˈbjuːtɪfəl/|biu-ti-phồ
+          ugly|/ˈʌɡli/|ắg-li
+          dangerous|/ˈdeɪndʒərəs/|đên-giờ-rợt-s
+          safe|/seɪf/|xê-ph
+          free|/friː/|phri
+          busy|/ˈbɪzi/|bí-zi
+          empty|/ˈempti/|em-ti
+          full|/fʊl/|phu-ồ
+          heavy|/ˈhevi/|hé-vi
+          light|/laɪt/|lai-t
+          fast|/fæst/|phét-s-t
+          slow|/sloʊ/|x-lâu
+          strong|/strɔːŋ/|x-troong
+          weak|/wiːk/|uích
+          dirty|/ˈdɜːrti/|đớ-ti
+          quiet|/ˈkwaɪət/|cuai-ợt
+          famous|/ˈfeɪməs/|phây-mợt-s
+          company|/ˈkʌmpəni/|căm-pờ-ni
+          business|/ˈbɪznəs/|bíz-nịt-s
+          profit|/ˈprɑːfɪt/|prố-phịt
+          loss|/lɔːs/|lót-s
+          investment|/ɪnˈvestmənt/|in-vét-mần-t
+          contract|/ˈkɑːntrækt/|cón-trếc-t
+          negotiate|/nɪˈɡoʊʃieɪt/|ni-gâu-si-êt
+          deadline|/ˈdedlaɪn/|đét-lai-n
+          revenue|/ˈrevənuː/|re-vờ-niu
+          strategy|/ˈstrætədʒi/|x-trét-tờ-gi
+          competitor|/kəmˈpetɪtər/|cầm-pé-ti-tờ
+          customer service|/ˈkʌstəmər ˈsɜːrvɪs/|cắt-x-tờ-mờ xớ-vịt-s
+          advertise|/ˈædvərtaɪz/|ét-vờ-tai-z
+          manufacture|/ˌmænjuˈfæktʃər/|men-niu-phéc-chờ
+          export|/ˈekspɔːrt/|éc-x-po-t
+          import|/ˈɪmpɔːrt/|im-po-t
+          shareholder|/ˈʃerhoʊldər/|se-hâu-ld-đờ
+          partnership|/ˈpɑːrtnərʃɪp/|pát-nờ-síp
+          inflation|/ɪnˈfleɪʃən/|in-phlây-sần
+          entrepreneur|/ˌɑːntrəprəˈnɜːr/|on-trờ-prờ-nớ
+          research|/ˈriːsɜːrtʃ/|ri-xớt-ch
+          theory|/ˈθɪri/|thia-ri
+          evidence|/ˈevɪdəns/|é-vì-đần-s
+          analyze|/ˈænəlaɪz/|e-nờ-lai-z
+          conclusion|/kənˈkluːʒən/|cần-clu-giần
+          hypothesis|/haɪˈpɑːθəsɪs/|hai-pó-thờ-xịt-s
+          method|/ˈmeθəd/|mé-thợt
+          survey|/ˈsɜːrveɪ/|xớ-vây
+          data|/ˈdeɪtə/|đây-tờ
+          statistics|/stəˈtɪstɪks/|x-tờ-tít-x-tịc-s
+          discuss|/dɪˈskʌs/|đi-x-cắt-s
+          argue|/ˈɑːrɡjuː/|a-gi-u
+          summarize|/ˈsʌməraɪz/|xăm-mờ-rai-z
+          compare|/kəmˈper/|cầm-pe
+          define|/dɪˈfaɪn/|đi-phai-n
+          describe|/dɪˈskraɪb/|đi-x-crai-b
+          predict|/prɪˈdɪkt/|pri-đíc-t
+          improve|/ɪmˈpruːv/|im-pru-v
+          achieve|/əˈtʃiːv/|ờ-chiv
+          concept|/ˈkɑːnsept/|cón-xép-t
+          government|/ˈɡʌvərnmənt/|găv-nờ-mần-t
+          society|/səˈsaɪəti/|xờ-xai-ờ-ti
+          law|/lɔː/|lo
+          election|/ɪˈlekʃən/|i-léc-sần
+          citizen|/ˈsɪtɪzən/|xí-ti-zần
+          justice|/ˈdʒʌstɪs/|giắt-s-tịt-s
+          poverty|/ˈpɑːvərti/|pó-vờ-ti
+          pollution|/pəˈluːʃən/|pờ-lu-sần
+          climate|/ˈklaɪmət/|clai-mợt
+          environment|/ɪnˈvaɪrənmənt/|in-vai-rần-mần-t
+          recycle|/ˌriːˈsaɪkəl/|ri-xai-cồ
+          energy|/ˈenərdʒi/|e-nờ-gi
+          resource|/ˈriːsɔːrs/|ri-xo-s
+          population|/ˌpɑːpjuˈleɪʃən/|pó-piu-lây-sần
+          education|/ˌedʒuˈkeɪʃən/|e-giu-kây-sần
+          culture|/ˈkʌltʃər/|căl-chờ
+          tradition|/trəˈdɪʃən/|trờ-đí-sần
+          community|/kəˈmjuːnəti/|cờ-miu-nờ-ti
+          equality|/iˈkwɑːləti/|i-cuó-lờ-ti
+          freedom|/ˈfriːdəm/|phri-đầm
+          efficient|/ɪˈfɪʃənt/|i-phí-sần-t
+          flexible|/ˈfleksəbəl/|phléc-xờ-bồ
+          reliable|/rɪˈlaɪəbəl/|ri-lai-ờ-bồ
+          ambitious|/æmˈbɪʃəs/|em-bí-sợt-s
+          creative|/kriˈeɪtɪv/|cri-ây-tịv
+          essential|/ɪˈsenʃəl/|i-xen-sồ
+          obvious|/ˈɑːbviəs/|óp-vi-ợt-s
+          ordinary|/ˈɔːrdəneri/|o-đờ-ne-ri
+          unique|/juˈniːk/|diu-ních
+          wealthy|/ˈwelθi/|ue-o-thi
+          fragile|/ˈfrædʒəl/|phré-giồ
+          reluctant|/rɪˈlʌktənt/|ri-lắc-tần-t
+          sufficient|/səˈfɪʃənt/|xờ-phí-sần-t
+          accurate|/ˈækjərət/|é-kiờ-rợt
+          temporary|/ˈtempəreri/|tem-pờ-re-ri
+          permanent|/ˈpɜːrmənənt/|pớ-mờ-nần-t
+          mature|/məˈtʃʊr/|mờ-chua
+          modest|/ˈmɑːdɪst/|mó-địt-s-t
+          stubborn|/ˈstʌbərn/|x-tắp-bần
+          fluent|/ˈfluːənt/|phlu-ần-t
+          accept|/əkˈsept/|ợc-xép-t
+          adapt|/əˈdæpt/|ờ-đép-t
+          admit|/ədˈmɪt/|ợt-mít
+          avoid|/əˈvɔɪd/|ờ-voi-d
+          complain|/kəmˈpleɪn/|cầm-plên
+          consider|/kənˈsɪdər/|cần-xí-đờ
+          depend|/dɪˈpend/|đi-pen-d
+          deserve|/dɪˈzɜːrv/|đi-zớ-v
+          encourage|/ɪnˈkɜːrɪdʒ/|in-cớ-rịt-g
+          establish|/ɪˈstæblɪʃ/|ị-x-té-blịt-sờ
+          explain|/ɪkˈspleɪn/|ịc-x-plên
+          ignore|/ɪɡˈnɔːr/|ịg-no
+          imagine|/ɪˈmædʒɪn/|i-mé-gịn
+          maintain|/meɪnˈteɪn/|mên-tên
+          persuade|/pərˈsweɪd/|pờ-xuê-t
+          recommend|/ˌrekəˈmend/|re-cờ-men-d
+          require|/rɪˈkwaɪər/|ri-cuai-ờ
+          suggest|/səˈdʒest/|xờ-giét-s-t
+          support|/səˈpɔːrt/|xờ-po-t
+          wonder|/ˈwʌndər/|oăn-đờ
+          house|/haʊs/|hao-s
+          room|/ruːm/|rum
+          door|/dɔːr/|đo
+          window|/ˈwɪndoʊ/|uin-đâu
+          table|/ˈteɪbəl/|tây-bồ
+          chair|/tʃer/|che
+          bed|/bed/|bét
+          kitchen|/ˈkɪtʃɪn/|kí-chần
+          bathroom|/ˈbæθruːm/|bẹth-rum
+          bedroom|/ˈbedruːm/|bét-rum
+          garden|/ˈɡɑːrdən/|ga-đần
+          roof|/ruːf/|ru-ph
+          floor|/flɔːr/|phlo
+          wall|/wɔːl/|uo-ồ
+          lamp|/læmp/|lem-p
+          key|/kiː/|ki
+          phone|/foʊn/|phâu-n
+          book|/bʊk/|búc
+          clock|/klɑːk/|clóc
+          mirror|/ˈmɪrər/|mi-rờ
+          head|/hed/|hét
+          face|/feɪs/|phê-s
+          eye|/aɪ/|ai
+          ear|/ɪr/|ia
+          nose|/noʊz/|nâu-z
+          mouth|/maʊθ/|mao-th
+          tooth|/tuːθ/|tu-th
+          hand|/hænd/|hen-d
+          finger|/ˈfɪŋɡər/|phinh-gờ
+          arm|/ɑːrm/|am
+          leg|/leɡ/|leg
+          foot|/fʊt/|phút
+          heart|/hɑːrt/|hat
+          stomach|/ˈstʌmək/|x-tắm-mợc
+          back|/bæk/|béc
+          hair|/her/|he
+          doctor|/ˈdɑːktər/|đóc-tờ
+          medicine|/ˈmedɪsɪn/|mé-đì-xần
+          pain|/peɪn/|pên
+          sick|/sɪk/|xíc
+          shirt|/ʃɜːrt/|sớt
+          t-shirt|/ˈtiː ʃɜːrt/|ti-sớt
+          pants|/pænts/|pen-t-s
+          jeans|/dʒiːnz/|gin-z
+          skirt|/skɜːrt/|x-cớt
+          dress|/dres/|đret-s
+          jacket|/ˈdʒækɪt/|giéc-kịt
+          coat|/koʊt/|câu-t
+          hat|/hæt/|hét
+          cap|/kæp/|kép
+          shoes|/ʃuːz/|su-z
+          socks|/sɑːks/|xóc-s
+          boots|/buːts/|bu-t-s
+          gloves|/ɡlʌvz/|glắv-z
+          scarf|/skɑːrf/|x-ca-ph
+          belt|/belt/|beo-t
+          tie|/taɪ/|tai
+          glasses|/ˈɡlæsɪz/|glé-xịt-z
+          bag|/bæɡ/|bég
+          umbrella|/ʌmˈbrelə/|ăm-bre-lờ
           AMLICH_EOF
           mkdir -p "app/src/main/res/raw"
           cat > "app/src/main/res/raw/vocab.txt" <<'AMLICH_EOF'
