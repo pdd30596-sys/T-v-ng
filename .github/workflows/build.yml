@@ -26,8 +26,8 @@ jobs:
                   applicationId "vn.tuvung.app"
                   minSdk 26
                   targetSdk 34
-                  versionCode 2
-                  versionName "1.1"
+                  versionCode 3
+                  versionName "1.2"
               }
 
               signingConfigs {
@@ -1031,7 +1031,7 @@ jobs:
                       if (q == null) {
                           rv.setTextViewText(R.id.tv_lesson, "Từ vựng tiếng Anh")
                           rv.setTextViewText(R.id.tv_skip, "")
-                          rv.setTextViewText(R.id.tv_speak, "")
+                          rv.setViewVisibility(R.id.tv_speak, View.GONE)
                           rv.setViewVisibility(R.id.tv_pron, View.GONE)
                           rv.setTextViewText(R.id.tv_feedback, "")
                           rv.setTextViewText(R.id.tv_word, "🎉 Bạn đã hoàn thành tất cả các bài!")
@@ -1048,7 +1048,7 @@ jobs:
                       rv.setViewVisibility(R.id.row2, View.VISIBLE)
                       rv.setTextViewText(R.id.tv_lesson, "Bài ${l.id + 1}: ${l.title}")
                       rv.setTextViewText(R.id.tv_skip, "Bỏ qua ⏭")
-                      rv.setTextViewText(R.id.tv_speak, "🔊 Nghe")
+                      rv.setViewVisibility(R.id.tv_speak, View.VISIBLE)
                       rv.setOnClickPendingIntent(R.id.tv_speak, broadcast(ctx, ACTION_SPEAK, id, 6, q.serial, 0))
                       val showPron = ctx.getSharedPreferences("vocab_quiz", Context.MODE_PRIVATE)
                           .getInt("pron_serial", -1) == q.serial
@@ -1161,17 +1161,6 @@ jobs:
                       android:textStyle="bold" />
 
                   <TextView
-                      android:id="@+id/tv_speak"
-                      android:layout_width="wrap_content"
-                      android:layout_height="wrap_content"
-                      android:paddingLeft="8dp"
-                      android:paddingRight="8dp"
-                      android:text="🔊 Nghe"
-                      android:textColor="#FDE68A"
-                      android:textSize="13sp"
-                      android:textStyle="bold" />
-
-                  <TextView
                       android:id="@+id/tv_skip"
                       android:layout_width="wrap_content"
                       android:layout_height="wrap_content"
@@ -1190,16 +1179,35 @@ jobs:
                   android:textColor="#86EFAC"
                   android:textSize="12sp" />
 
-              <TextView
-                  android:id="@+id/tv_word"
+              <LinearLayout
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:gravity="center_vertical"
+                  android:orientation="horizontal">
+
+                  <TextView
+                  android:id="@+id/tv_word"
+                  android:layout_width="0dp"
+                  android:layout_height="match_parent"
                   android:layout_weight="1"
                   android:gravity="center"
                   android:text="Từ vựng"
                   android:textColor="#FFFFFF"
                   android:textSize="28sp"
                   android:textStyle="bold" />
+
+                  <TextView
+                      android:id="@+id/tv_speak"
+                      android:layout_width="64dp"
+                      android:layout_height="64dp"
+                      android:layout_marginLeft="6dp"
+                      android:background="@drawable/widget_opt_bg"
+                      android:gravity="center"
+                      android:text="🔊"
+                      android:textColor="#FDE68A"
+                      android:textSize="30sp" />
+              </LinearLayout>
 
               <TextView
                   android:id="@+id/tv_pron"
